@@ -1,0 +1,37 @@
+name: 持续集成
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 设置 pnpm
+        run: corepack enable && corepack prepare pnpm@10.15.1 --activate
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 运行测试
+        run: pnpm test
+
+      - name: 生产构建
+        run: pnpm build
+
+      - name: 验证容器构建
+        run: docker build --tag lexue:ci .

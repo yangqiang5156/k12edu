@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+.pnpm-store/
+release/
+*.local
+.env
+.env.*
+!.env.example
+coverage/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "family-extra-2026-01",
+  "title": "家庭扩展内容示例",
+  "contentVersion": "1.0.0",
+  "items": [
+    {
+      "id": "family-word-001",
+      "module": "english",
+      "kind": "word",
+      "title": "tiger",
+      "body": "老虎",
+      "tags": ["动物"]
+    },
+    {
+      "id": "family-science-001",
+      "module": "science",
+      "kind": "science",
+      "title": "冰块去哪了？",
+      "body": "在家长陪伴下把冰块放在碗里，观察它慢慢变成水。"
+    }
+  ]
+}

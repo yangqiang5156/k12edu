@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+: "${LEXUE_IMAGE:?缺少 LEXUE_IMAGE}"
+LEXUE_PORT="${LEXUE_PORT:-8080}"
+COMPOSE_FILE="${COMPOSE_FILE:-compose.yaml}"
+CONTAINER_NAME="lexue"
+
+previous_image="$(docker inspect --format '{{.Config.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+
+write_env() {
+  umask 077
+  {
+    printf 'LEXUE_IMAGE=%s\n' "$1"
+    printf 'LEXUE_PORT=%s\n' "$LEXUE_PORT"
+  } > .env.next
+  mv .env.next .env
+}
+
+wait_healthy() {
+  attempts=0
+  while [ "$attempts" -lt 18 ]; do
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    if [ "$status" = "healthy" ] || [ "$status" = "running" ]; then
+      return 0
+    fi
+    if [ "$status" = "unhealthy" ] || [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+      return 1
+    fi
+    attempts=$((attempts + 1))
+    sleep 5
+  done
+  return 1
+}
+
+write_env "$LEXUE_IMAGE"
+docker compose -f "$COMPOSE_FILE" pull lexue
+docker compose -f "$COMPOSE_FILE" up -d --remove-orphans lexue
+
+if wait_healthy; then
+  printf '乐学已部署：%s\n' "$LEXUE_IMAGE"
+  exit 0
+fi
+
+printf '新版本健康检查失败，准备回滚。\n' >&2
+docker logs --tail 100 "$CONTAINER_NAME" >&2 || true
+
+if [ -n "$previous_image" ]; then
+  write_env "$previous_image"
+  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans lexue
+  if wait_healthy; then
+    printf '已回滚到：%s\n' "$previous_image" >&2
+  else
+    printf '回滚后服务仍未恢复，请人工检查。\n' >&2
+  fi
+else
+  printf '没有可用的上一版本镜像，无法自动回滚。\n' >&2
+fi
+
+exit 1
