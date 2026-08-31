@@ -23,11 +23,24 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
   const item = task.items[index];
   const isDone = task.doneItemIds.includes(item.id);
   const meta = MODULE_META[task.module];
+  const hasLessonAudio = task.module !== 'math';
   const [letterUpper = '', letterLower = ''] = item.kind === 'letter' ? item.title.split(/\s+/) : [];
   const letterExample = item.kind === 'letter' ? item.detail?.split('\n').at(-1) : undefined;
   const lessonDetail = item.kind === 'classic'
     ? item.detail?.replace(/^掌握\d+首古诗后解锁\s*/, '')
     : item.detail;
+  const poemParts = item.kind === 'poem' ? lessonDetail?.split('\n').filter(Boolean) ?? [] : [];
+  const poemAuthor = poemParts[0];
+  const poemPhrases = poemParts.slice(1).join('\n').match(/[^，。！？；\n]+[，。！？；]?/g)?.map((phrase) => phrase.trim()).filter(Boolean) ?? [];
+  const audioButtonLabel = item.kind === 'character'
+    ? '听汉字朗读'
+    : item.kind === 'letter'
+      ? '听字母和例词'
+      : item.kind === 'word' || item.kind === 'reader'
+        ? '听英语朗读'
+        : item.kind === 'poem' || item.kind === 'classic'
+          ? '听国学朗读'
+          : '听内容朗读';
 
   useEffect(() => {
     stopOfflineLessonAudio();
@@ -118,19 +131,26 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
         {showLab ? <NumberLab soundEnabled={soundEnabled} /> : (
           <main className={`task-content task-${item.kind}`}>
             {item.kind === 'trace' ? <TraceCanvas glyph={item.title} onDone={finish} /> : <>
-              <button className={`lesson-visual ${audioPlaying ? 'is-speaking' : ''}`} onClick={() => void readItem()}>
+              <div className={`lesson-visual ${audioPlaying ? 'is-speaking' : ''}`}>
                 <span>{item.kind === 'character' || item.kind === 'word' || item.kind === 'letter' ? item.title : meta.icon}</span>
-                {(item.kind === 'character' || item.kind === 'word' || item.kind === 'letter') && <small>🔊 点我听一听</small>}
-                {(item.kind === 'poem' || item.kind === 'classic') && <small>🔊 点一下，听朗读</small>}
-              </button>
-              {audioStatus && <div className="lesson-audio-status" role="status">{audioStatus}</div>}
+              </div>
               {item.kind === 'letter' ? <div className="letter-read-flow">
                 <div><span>大写字母</span><strong>{letterUpper}</strong></div>
                 <div><span>小写字母</span><strong>{letterLower}</strong></div>
                 <div className="letter-word-step"><span>例词</span><strong>{letterExample}</strong></div>
               </div> : <>
                 <h2>{item.prompt ?? item.title}</h2>
-                {lessonDetail && <div className="lesson-detail">{lessonDetail}</div>}
+                {item.kind === 'poem' && lessonDetail ? <div className="lesson-detail poem-detail">
+                  {poemAuthor && <span className="poem-author">{poemAuthor}</span>}
+                  <div className="poem-verses">{poemPhrases.map((phrase, phraseIndex) => <span key={`${phrase}-${phraseIndex}`}>{phrase}</span>)}</div>
+                </div> : lessonDetail && <div className="lesson-detail">{lessonDetail}</div>}
+              </>}
+              {hasLessonAudio && <>
+                <button className={`lesson-audio-button ${audioPlaying ? 'is-speaking' : ''}`} onClick={() => void readItem()} disabled={audioPlaying}>
+                  <span aria-hidden="true">🔊</span>
+                  <strong>{audioPlaying ? '正在朗读…' : audioButtonLabel}</strong>
+                </button>
+                <div className="lesson-audio-status" role="status">{audioStatus}</div>
               </>}
               {item.options?.length ? <div className="answer-grid">{item.options.map((option) => <button key={option} onClick={() => choose(option)}>{option}</button>)}</div> : <button className="primary-button finish-button" onClick={finish}>{isDone ? '已经完成 ✓' : item.kind === 'reader' ? '朗读完成' : '我学会啦'}</button>}
             </>}

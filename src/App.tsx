@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { playClick } from './audio';
 import {
@@ -7,7 +7,7 @@ import {
 } from './db';
 import {
   attendanceBonusEntries, calculateWallet, completedDaysThisWeek, DAILY_PLAN_CURRICULUM_VERSION, generateDailyPlan, localDateKey,
-  milestoneBadgeEntry, rewardBalanceAdjustmentEntries, rewardEntriesForCompletion, shouldGrantAttendanceBonus, validateBackup, validateContentPack
+  milestoneBadgeEntry, regenerateDailyPlanForSettings, rewardBalanceAdjustmentEntries, rewardEntriesForCompletion, shouldGrantAttendanceBonus, validateBackup, validateContentPack
 } from './logic';
 import { MODULE_META, type AppData, type CompletionEvent, type ContentItem, type DailyPlan, type ParentSettings, type Redemption, type RewardDefinition, type RewardLedgerEntry, type Wallet } from './types';
 import { ParentPanel } from './components/ParentPanel';
@@ -39,6 +39,9 @@ function App() {
   const [parentOpen, setParentOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [celebrate, setCelebrate] = useState(0);
+  const [feeding, setFeeding] = useState(false);
+  const [feedAnimation, setFeedAnimation] = useState(0);
+  const feedTimer = useRef<number | undefined>(undefined);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent>();
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const today = localDateKey();
@@ -47,6 +50,12 @@ function App() {
     onRegisteredSW: (_swUrl, registration) => {
       if (!registration) return;
       const checkForUpdate = () => { void registration.update(); };
+      const hadController = Boolean(navigator.serviceWorker.controller);
+      const reloadOnUpdate = () => {
+        if (hadController) window.location.reload();
+      };
+      void registration.update();
+      navigator.serviceWorker.addEventListener('controllerchange', reloadOnUpdate, { once: true });
       window.setInterval(checkForUpdate, 5 * 60 * 1000);
       window.addEventListener('focus', checkForUpdate);
       document.addEventListener('visibilitychange', () => {
@@ -93,6 +102,10 @@ function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  useEffect(() => () => {
+    if (feedTimer.current) window.clearTimeout(feedTimer.current);
+  }, []);
+
   const currentPlan = data?.plans.find((plan) => plan.date === today);
   const wallet = useMemo(() => calculateWallet(data?.ledger ?? []), [data?.ledger]);
   const activeTask = currentPlan?.modules.find((task) => task.id === activeTaskId);
@@ -104,8 +117,18 @@ function App() {
 
   const updateSettings = async (settings: ParentSettings) => {
     await saveSettings(settings);
-    if (data) await savePet({ ...data.pet, selected: settings.petId });
-    setData((current) => current && ({ ...current, settings, pet: { ...current.pet, selected: settings.petId } }));
+    if (data) {
+      const pet = { ...data.pet, selected: settings.petId };
+      const existingPlan = data.plans.find((plan) => plan.date === today);
+      const plan = regenerateDailyPlanForSettings(today, settings, data.content, data.completions, existingPlan);
+      await Promise.all([savePet(pet), savePlan(plan)]);
+      setData((current) => current && ({
+        ...current,
+        settings,
+        pet,
+        plans: [...current.plans.filter((entry) => entry.date !== today), plan]
+      }));
+    }
     toast('设置已保存');
   };
 
@@ -171,13 +194,24 @@ function App() {
   };
 
   const feedPet = async () => {
-    if (!data || wallet.foodHalfUnits < 2) return;
+    if (!data || wallet.foodHalfUnits < 2 || feeding) return;
+    setFeeding(true);
+    setFeedAnimation((value) => value + 1);
     const now = new Date().toISOString();
     const entry: RewardLedgerEntry = { id: `feed-${Date.now()}`, date: today, createdAt: now, reason: '喂养学习伙伴', sourceId: `feed-${Date.now()}`, currency: 'foodHalfUnits', delta: -2 };
     const pet = { ...data.pet, mood: Math.min(100, data.pet.mood + 10), fedCount: data.pet.fedCount + 1, lastInteractionAt: now };
-    await Promise.all([saveLedgerEntries([entry]), savePet(pet)]);
-    setData({ ...data, ledger: [...data.ledger, entry], pet });
-    toast('伙伴吃得好开心！');
+    try {
+      await Promise.all([saveLedgerEntries([entry]), savePet(pet)]);
+      setData({ ...data, ledger: [...data.ledger, entry], pet });
+      if (feedTimer.current) window.clearTimeout(feedTimer.current);
+      feedTimer.current = window.setTimeout(() => {
+        setFeeding(false);
+        toast('伙伴吃饱啦，谢谢你的照顾！');
+      }, data.settings.reduceMotion ? 500 : 2400);
+    } catch {
+      setFeeding(false);
+      toast('喂食没有成功，请再试一次');
+    }
   };
 
   const requestReward = async (reward: RewardDefinition) => {
@@ -321,9 +355,9 @@ function App() {
       <main className="child-main">
         {tab === 'home' && <>
           <section className="wallet-row">
-            <span>⭐ <strong>{wallet.stars}</strong></span><span>🥕 <strong>{wallet.foodHalfUnits / 2}</strong></span><span>💎 <strong>{wallet.gems}</strong></span><span>🏅 <strong>{wallet.badges}</strong></span>
+            <span>⭐ <strong>{wallet.stars}</strong></span><span className={`carrot-balance ${feeding ? 'is-feeding' : ''}`} key={`carrot-${feedAnimation}`}>🥕 <strong>{wallet.foodHalfUnits / 2}</strong></span><span>💎 <strong>{wallet.gems}</strong></span><span>🏅 <strong>{wallet.badges}</strong></span>
           </section>
-          <Pet pet={data.pet} wallet={wallet} settings={data.settings} onFeed={feedPet} />
+          <Pet pet={data.pet} wallet={wallet} settings={data.settings} feeding={feeding} feedAnimation={feedAnimation} onFeed={feedPet} />
           {!isStandalone && <section className="install-card"><div><strong>把乐学装到手机桌面</strong><span>离线也能学，每天打开就有新清单</span></div><button onClick={install}>添加</button></section>}
           <section className="today-heading"><div><span className="eyebrow">今日学习清单</span><h2>{currentPlan.isActiveDay ? `${completedModules}/${currentPlan.modules.length} 个模块完成` : '今天是轻松休息日'}</h2></div><div className="progress-ring" style={{ '--progress': `${percent * 3.6}deg` } as React.CSSProperties}><span>{percent}%</span></div></section>
           <div className="task-list">

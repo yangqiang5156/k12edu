@@ -161,6 +161,25 @@ export function generateDailyPlan(
   return { date, generatedAt: new Date().toISOString(), curriculumVersion: DAILY_PLAN_CURRICULUM_VERSION, isActiveDay, modules };
 }
 
+export function regenerateDailyPlanForSettings(
+  date: string,
+  settings: ParentSettings,
+  content: ContentItem[],
+  completions: CompletionEvent[],
+  existingPlan?: DailyPlan
+): DailyPlan {
+  const freshPlan = generateDailyPlan(date, settings, content, completions);
+  if (!existingPlan) return freshPlan;
+
+  const previousModules = new Map(existingPlan.modules.map((module) => [module.module, module]));
+  freshPlan.modules = freshPlan.modules.map((module) => previousModules.get(module.module) ?? module);
+  if (freshPlan.modules.length > 0 && freshPlan.modules.every((module) => module.collectedAt)) {
+    freshPlan.completedAt = existingPlan.completedAt;
+  }
+  freshPlan.weeklyBonusGranted = existingPlan.weeklyBonusGranted;
+  return freshPlan;
+}
+
 export function moduleRewards(module: ModuleId): Record<'stars' | 'foodHalfUnits' | 'xp', number> {
   return module === 'writing'
     ? { stars: 1, foodHalfUnits: 1, xp: 1 }

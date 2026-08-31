@@ -7,6 +7,7 @@ interface Props {
 
 export function TraceCanvas({ glyph, onDone }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const guideCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const [hasInk, setHasInk] = useState(false);
 
@@ -18,6 +19,24 @@ export function TraceCanvas({ glyph, onDone }: Props) {
   };
 
   useEffect(clear, [glyph]);
+
+  useEffect(() => {
+    const canvas = guideCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#e7e0ec';
+    ctx.font = '800 180px "Noto Sans SC", "Roboto", "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textBaseline = 'alphabetic';
+    const metrics = ctx.measureText(glyph);
+    const left = metrics.actualBoundingBoxLeft || 0;
+    const right = metrics.actualBoundingBoxRight || metrics.width;
+    const ascent = metrics.actualBoundingBoxAscent || 135;
+    const descent = metrics.actualBoundingBoxDescent || 35;
+    const x = canvas.width / 2 + (left - right) / 2;
+    const y = canvas.height / 2 + (ascent - descent) / 2;
+    ctx.fillText(glyph, x, y);
+  }, [glyph]);
 
   const point = (event: PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current!;
@@ -50,8 +69,8 @@ export function TraceCanvas({ glyph, onDone }: Props) {
   return (
     <div className="trace-area">
       <div className="trace-board" aria-label={`描写 ${glyph}`}>
-        <span className="trace-glyph">{glyph}</span>
-        <canvas ref={canvasRef} width="300" height="260" onPointerDown={start} onPointerMove={move}
+        <canvas className="trace-guide" ref={guideCanvasRef} width="300" height="260" aria-hidden="true" />
+        <canvas className="trace-ink" ref={canvasRef} width="300" height="260" onPointerDown={start} onPointerMove={move}
           onPointerUp={() => { drawing.current = false; }} onPointerCancel={() => { drawing.current = false; }} />
       </div>
       <div className="button-row">

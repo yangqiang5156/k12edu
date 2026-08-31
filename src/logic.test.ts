@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS } from './db';
 import {
   attendanceBonusEntries, calculateWallet, completedDaysThisWeek, generateDailyPlan, milestoneBadgeEntry,
   chineseNumberAudioTokens, englishNumberAudioTokens, moduleRewards, numberAudioTokens, numberToChinese, numberToEnglish, petLevel, rewardBalanceAdjustmentEntries, rewardEntriesForCompletion,
-  shouldGrantAttendanceBonus, unlockedClassicCount, validateBackup, validateContentPack, weekStartKey
+  regenerateDailyPlanForSettings, shouldGrantAttendanceBonus, unlockedClassicCount, validateBackup, validateContentPack, weekStartKey
 } from './logic';
 import type { CompletionEvent, DailyPlan, RewardLedgerEntry } from './types';
 
@@ -41,6 +41,33 @@ describe('每日排课', () => {
     expect(first.isActiveDay).toBe(false);
     expect(first.modules).toEqual(second.modules);
     expect(first.modules).toHaveLength(0);
+  });
+
+  it('家长把周六改为学习日后立即重新生成当天清单', () => {
+    const date = '2026-08-15';
+    const restPlan = generateDailyPlan(date, DEFAULT_SETTINGS, BUILTIN_CONTENT, []);
+    expect(restPlan.isActiveDay).toBe(false);
+    expect(restPlan.modules).toHaveLength(0);
+
+    const saturdaySettings = { ...DEFAULT_SETTINGS, activeWeekdays: [...DEFAULT_SETTINGS.activeWeekdays, 6] };
+    const updatedPlan = regenerateDailyPlanForSettings(date, saturdaySettings, BUILTIN_CONTENT, [], restPlan);
+    expect(updatedPlan.isActiveDay).toBe(true);
+    expect(updatedPlan.modules.map((task) => task.module)).toEqual(['guoxue', 'literacy', 'math', 'english', 'writing']);
+  });
+
+  it('重新生成设置相关清单时保留当天已有进度', () => {
+    const date = '2026-08-10';
+    const existingPlan = generateDailyPlan(date, DEFAULT_SETTINGS, BUILTIN_CONTENT, []);
+    existingPlan.modules[0].doneItemIds = [existingPlan.modules[0].items[0].id];
+
+    const updatedPlan = regenerateDailyPlanForSettings(
+      date,
+      { ...DEFAULT_SETTINGS, soundEnabled: false },
+      BUILTIN_CONTENT,
+      [],
+      existingPlan
+    );
+    expect(updatedPlan.modules[0].doneItemIds).toEqual(existingPlan.modules[0].doneItemIds);
   });
 
   it('每掌握10首不同古诗解锁一篇古文', () => {
