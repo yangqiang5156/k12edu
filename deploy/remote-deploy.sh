@@ -2,9 +2,26 @@
 set -eu
 
 : "${LEXUE_IMAGE:?缺少 LEXUE_IMAGE}"
+: "${LEXUE_IMAGE_ARCHIVE:?缺少 LEXUE_IMAGE_ARCHIVE}"
 LEXUE_PORT="${LEXUE_PORT:-8080}"
 COMPOSE_FILE="${COMPOSE_FILE:-compose.yaml}"
 CONTAINER_NAME="lexue"
+
+case "$LEXUE_IMAGE_ARCHIVE" in
+  */*|*..*)
+    printf '镜像归档文件名不合法：%s\n' "$LEXUE_IMAGE_ARCHIVE" >&2
+    exit 1
+    ;;
+esac
+
+[ -f "$LEXUE_IMAGE_ARCHIVE" ] || {
+  printf '找不到镜像归档：%s\n' "$LEXUE_IMAGE_ARCHIVE" >&2
+  exit 1
+}
+[ -f "$LEXUE_IMAGE_ARCHIVE.sha256" ] || {
+  printf '找不到镜像校验文件：%s.sha256\n' "$LEXUE_IMAGE_ARCHIVE" >&2
+  exit 1
+}
 
 previous_image="$(docker inspect --format '{{.Config.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
 
@@ -33,9 +50,13 @@ wait_healthy() {
   return 1
 }
 
+sha256sum -c "$LEXUE_IMAGE_ARCHIVE.sha256"
+gzip -dc "$LEXUE_IMAGE_ARCHIVE" | docker load
+docker image inspect "$LEXUE_IMAGE" >/dev/null
+rm -f "$LEXUE_IMAGE_ARCHIVE" "$LEXUE_IMAGE_ARCHIVE.sha256"
+
 write_env "$LEXUE_IMAGE"
-docker compose -f "$COMPOSE_FILE" pull lexue
-docker compose -f "$COMPOSE_FILE" up -d --remove-orphans lexue
+docker compose -f "$COMPOSE_FILE" up -d --pull never --remove-orphans lexue
 
 if wait_healthy; then
   printf '乐学已部署：%s\n' "$LEXUE_IMAGE"
@@ -47,7 +68,7 @@ docker logs --tail 100 "$CONTAINER_NAME" >&2 || true
 
 if [ -n "$previous_image" ]; then
   write_env "$previous_image"
-  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans lexue
+  docker compose -f "$COMPOSE_FILE" up -d --pull never --remove-orphans lexue
   if wait_healthy; then
     printf '已回滚到：%s\n' "$previous_image" >&2
   else

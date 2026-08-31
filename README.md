@@ -21,7 +21,7 @@ CI=true pnpm preview
 
 ## Docker 与自动发布
 
-本项目支持 Docker 部署。推送 `vX.Y.Z` 版本标签后，GitHub Actions 会自动测试、构建并推送 GHCR 镜像，创建 GitHub Release，再通过 SSH 部署到阿里云；新容器健康检查失败时会恢复上一镜像。
+本项目支持 Docker 部署。推送 `vX.Y.Z` 版本标签后，GitHub Actions 会自动测试、构建并推送 GHCR 灾备镜像，创建 GitHub Release，再将压缩镜像通过 SSH 直接传送并导入阿里云；生产机无需跨境拉取 GHCR。新容器健康检查失败时会恢复上一镜像。
 
 服务器参数、GitHub Secrets、首次发布、回滚和客户端缓存更新策略见 [自动发布与阿里云部署](docs/自动发布与阿里云部署.md)。
 

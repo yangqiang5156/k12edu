@@ -56,9 +56,28 @@ jobs:
         shell: bash
         run: |
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker build --pull --tag "$repository:$GITHUB_REF_NAME" --tag "$repository:latest" .
+          docker build --pull --file deploy/Dockerfile.runtime --tag "$repository:$GITHUB_REF_NAME" --tag "$repository:latest" .
           docker push "$repository:$GITHUB_REF_NAME"
           docker push "$repository:latest"
+
+      - name: 打包生产部署镜像
+        shell: bash
+        run: |
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          archive="lexue-image-${GITHUB_REF_NAME}.tar.gz"
+          docker save "$repository:$GITHUB_REF_NAME" | gzip -1 > "$archive"
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: 暂存生产部署镜像
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-image-${{ github.ref_name }}
+          path: |
+            lexue-image-${{ github.ref_name }}.tar.gz
+            lexue-image-${{ github.ref_name }}.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
       - name: 生成静态部署包
         shell: bash
@@ -80,6 +99,12 @@ jobs:
     steps:
       - name: 检出部署脚本
         uses: actions/checkout@v6
+
+      - name: 下载生产部署镜像
+        uses: actions/download-artifact@v4
+        with:
+          name: production-image-${{ github.ref_name }}
+          path: deploy-image
 
       - name: 校验部署参数
         env:
@@ -112,20 +137,20 @@ jobs:
           ALIYUN_SSH_PORT: ${{ secrets.ALIYUN_SSH_PORT }}
           ALIYUN_DEPLOY_PATH: ${{ secrets.ALIYUN_DEPLOY_PATH }}
           ALIYUN_APP_PORT: ${{ secrets.ALIYUN_APP_PORT }}
-          GHCR_TOKEN: ${{ github.token }}
           LEXUE_IMAGE: ${{ needs.build-and-publish.outputs.image }}
         run: |
           ssh_port="${ALIYUN_SSH_PORT:-22}"
           deploy_path="${ALIYUN_DEPLOY_PATH:-lexue}"
           app_port="${ALIYUN_APP_PORT:-8080}"
           ssh_target="$ALIYUN_USER@$ALIYUN_HOST"
-          ssh_args=(-i ~/.ssh/aliyun_deploy -p "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          ssh_args=(-i ~/.ssh/aliyun_deploy -p "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 
           [[ "$deploy_path" =~ ^[A-Za-z0-9_./-]+$ ]] && [[ "$deploy_path" != *".."* ]]
+          image_archive="lexue-image-${GITHUB_REF_NAME}.tar.gz"
           ssh "${ssh_args[@]}" "$ssh_target" "mkdir -p '$deploy_path'"
-          scp -i ~/.ssh/aliyun_deploy -P "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            deploy/compose.yaml deploy/remote-deploy.sh "$ssh_target:$deploy_path/"
-          printf '%s' "$GHCR_TOKEN" | ssh "${ssh_args[@]}" "$ssh_target" \
-            "docker login ghcr.io --username '$GITHUB_ACTOR' --password-stdin"
+          scp -i ~/.ssh/aliyun_deploy -P "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o Compression=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            deploy/compose.yaml deploy/remote-deploy.sh \
+            "deploy-image/$image_archive" "deploy-image/$image_archive.sha256" \
+            "$ssh_target:$deploy_path/"
           ssh "${ssh_args[@]}" "$ssh_target" \
-            "cd '$deploy_path' && chmod 700 remote-deploy.sh && LEXUE_IMAGE='$LEXUE_IMAGE' LEXUE_PORT='$app_port' ./remote-deploy.sh"
+            "cd '$deploy_path' && chmod 700 remote-deploy.sh && LEXUE_IMAGE='$LEXUE_IMAGE' LEXUE_IMAGE_ARCHIVE='$image_archive' LEXUE_PORT='$app_port' ./remote-deploy.sh"
