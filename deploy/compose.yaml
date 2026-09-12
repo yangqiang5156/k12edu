@@ -3,6 +3,11 @@ services:
     image: ${LEXUE_IMAGE:?请设置 LEXUE_IMAGE}
     container_name: lexue
     restart: unless-stopped
+    env_file:
+      - path: .env.tts
+        required: false
+    environment:
+      PORT: 80
     ports:
       - "127.0.0.1:${LEXUE_PORT:-8080}:80"
     healthcheck:

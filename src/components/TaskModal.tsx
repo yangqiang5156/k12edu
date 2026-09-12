@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { playOfflineLessonAudio, speak, stopOfflineLessonAudio } from '../audio';
+import { useEffect, useRef, useState } from 'react';
+import { speak, stopSpeech, speechError } from '../audio';
 import { MODULE_META, type DailyModuleTask } from '../types';
 import { TraceCanvas } from './TraceCanvas';
 import { NumberLab } from './NumberLab';
@@ -12,6 +12,7 @@ interface Props {
 }
 
 export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
+  const readJob = useRef(0);
   const [index, setIndex] = useState(() => {
     const first = task.items.findIndex((item) => !task.doneItemIds.includes(item.id));
     return first < 0 ? 0 : first;
@@ -43,12 +44,13 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
           : '听内容朗读';
 
   useEffect(() => {
-    stopOfflineLessonAudio();
+    readJob.current += 1;
+    stopSpeech();
     setAudioStatus('');
     setAudioPlaying(false);
   }, [item.id]);
 
-  useEffect(() => stopOfflineLessonAudio, []);
+  useEffect(() => () => { readJob.current += 1; stopSpeech(); }, []);
 
   const finish = () => {
     if (!isDone) onProgress(item.id);
@@ -73,49 +75,22 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
       setAudioStatus('声音已由家长关闭');
       return;
     }
-    if (item.kind === 'character' && /^char-\d+$/.test(item.contentId)) {
-      setAudioPlaying(true);
-      setAudioStatus('正在朗读…');
-      try {
-        await playOfflineLessonAudio(`audio/literacy/${item.contentId}.mp3`, true);
-        setAudioStatus('朗读完成，再点汉字可以重听');
-      } catch {
-        setAudioStatus('语音加载失败，请刷新应用后再试');
-      } finally {
-        setAudioPlaying(false);
-      }
-      return;
+    const job = ++readJob.current;
+    const text = item.kind === 'letter'
+      ? `${letterUpper}. ${letterUpper}. ${letterExample ?? ''}.`
+      : item.kind === 'character'
+        ? `${item.title}。这个字读，${item.title}。`
+        : `${item.title}。${lessonDetail ?? ''}`;
+    setAudioPlaying(true);
+    setAudioStatus('正在准备在线朗读…');
+    try {
+      await speak(text, true, 'auto');
+      if (job === readJob.current) setAudioStatus('朗读完成，再点一次可以重听');
+    } catch (error) {
+      if (job === readJob.current) setAudioStatus(speechError(error));
+    } finally {
+      if (job === readJob.current) setAudioPlaying(false);
     }
-    if (item.kind === 'letter' && /^letter-[a-z]$/.test(item.contentId)) {
-      setAudioPlaying(true);
-      setAudioStatus('正在朗读字母和例词…');
-      try {
-        await playOfflineLessonAudio(`audio/english/${item.contentId}.mp3`, true);
-        setAudioStatus('朗读完成，再点字母可以重听');
-      } catch {
-        setAudioStatus('语音加载失败，请刷新应用后再试');
-      } finally {
-        setAudioPlaying(false);
-      }
-      return;
-    }
-    if ((item.kind === 'poem' || item.kind === 'classic') && /^(poem|classic)-\d+$/.test(item.contentId)) {
-      setAudioPlaying(true);
-      setAudioStatus('正在有节奏地朗读标题和正文…');
-      try {
-        const audioFile = item.kind === 'classic' ? `${item.contentId}-clean-v2.mp3` : `${item.contentId}.mp3`;
-        await playOfflineLessonAudio(`audio/guoxue/${audioFile}`, true);
-        setAudioStatus('朗读完成，再点一次可以重听');
-      } catch {
-        setAudioStatus('语音加载失败，请刷新应用后再试');
-      } finally {
-        setAudioPlaying(false);
-      }
-      return;
-    }
-    const text = item.kind === 'word' ? `${item.title}, ${lessonDetail ?? ''}` : `${item.title}。${lessonDetail ?? ''}`;
-    speak(text, soundEnabled, item.kind === 'word' || item.kind === 'reader' ? 'en-US' : 'zh-CN');
-    setAudioStatus('已调用设备朗读');
   };
 
   return (

@@ -3,7 +3,7 @@ import { BUILTIN_CONTENT } from './content';
 import { DEFAULT_SETTINGS } from './db';
 import {
   attendanceBonusEntries, calculateWallet, completedDaysThisWeek, generateDailyPlan, milestoneBadgeEntry,
-  chineseNumberAudioTokens, englishNumberAudioTokens, moduleRewards, numberAudioTokens, numberToChinese, numberToEnglish, petLevel, rewardBalanceAdjustmentEntries, rewardEntriesForCompletion,
+  moduleRewards, numberSpeechText, numberToChinese, numberToEnglish, petLevel, rewardBalanceAdjustmentEntries, rewardEntriesForCompletion,
   regenerateDailyPlanForSettings, shouldGrantAttendanceBonus, unlockedClassicCount, validateBackup, validateContentPack, weekStartKey
 } from './logic';
 import type { CompletionEvent, DailyPlan, RewardLedgerEntry } from './types';
@@ -157,12 +157,10 @@ describe('导入校验与数字工具', () => {
     expect(numberToChinese(1000)).toBe('一千');
   });
 
-  it('使用有限离线词元正确组合0到1000中英文读音', () => {
-    expect(chineseNumberAudioTokens(10)).toEqual(['zh_ten']);
-    expect(chineseNumberAudioTokens(105)).toEqual(['zh_1', 'zh_hundred', 'zh_0', 'zh_5']);
-    expect(englishNumberAudioTokens(105)).toEqual(['en_1', 'en_hundred', 'en_and', 'en_5']);
-    expect(numberAudioTokens(999)).toEqual(['zh_9', 'zh_hundred', 'zh_9', 'zh_ten', 'zh_9', 'en_9', 'en_hundred', 'en_and', 'en_90', 'en_9']);
-    expect(numberAudioTokens(1000, 'en')).toEqual(['en_1', 'en_thousand']);
-    expect(numberAudioTokens(1001)).toEqual([]);
+  it('将数字转换为完整朗读文本', () => {
+    expect(numberSpeechText(105)).toBe('一百零五。One Hundred and Five.');
+    expect(numberSpeechText(10, 'zh')).toBe('十');
+    expect(numberSpeechText(1000, 'en')).toBe('One Thousand');
+    expect(numberSpeechText(1001)).toBe('');
   });
 });

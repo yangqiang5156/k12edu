@@ -10,14 +10,15 @@ RUN pnpm install --frozen-lockfile
 COPY index.html tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
+COPY server ./server
 RUN pnpm build
 
-FROM nginx:1.27-alpine
-
-COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /app/dist /usr/share/nginx/html
-
+FROM node:22-alpine
+WORKDIR /app
+COPY server ./server
+COPY --from=builder /app/dist ./dist
+ENV PORT=80
 EXPOSE 80
-
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \
   CMD wget -q -O /dev/null http://127.0.0.1/healthz || exit 1
+CMD ["node", "server/index.mjs"]

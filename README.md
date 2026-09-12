@@ -6,6 +6,8 @@
 
 ```bash
 pnpm install
+cp .env.example .env
+# 填入千问 API Key 与工作空间 ID 后启动
 pnpm dev
 ```
 
@@ -17,7 +19,7 @@ CI=true pnpm build
 CI=true pnpm preview
 ```
 
-构建产物位于 `dist/`，可部署至任意 HTTPS 静态托管。项目使用相对资源路径和 Hash 路由，部署在域名根目录或子目录均可使用。
+构建产物位于 `dist/`，需要与 server/ 一起部署，或由静态站点反向代理 /api/tts 至语音服务。项目使用相对资源路径和 Hash 路由，部署在域名根目录或子目录均可使用。
 
 ## Docker 与自动发布
 
@@ -29,7 +31,7 @@ CI=true pnpm preview
 
 ```bash
 docker build -t lexue:local .
-docker run --rm -p 8080:80 lexue:local
+docker run --rm --env-file .env -e PORT=80 -p 8080:80 lexue:local
 ```
 
 ## 手机安装
@@ -38,7 +40,7 @@ docker run --rm -p 8080:80 lexue:local
 - iPhone/iPad：使用 Safari 打开，点击“分享”，选择“添加到主屏幕”。
 - PWA 安装和 Service Worker 在正式环境中需要 HTTPS；`localhost` 本地预览除外。
 
-首次打开后，应用壳、示例题库、图标和数字模块的中英文语音都会被缓存。更新就绪时页面会显示刷新提示。
+首次打开后，应用壳、示例题库、图标会被缓存；语音朗读需要联网，不再缓存离线音频。更新就绪时页面会显示刷新提示。
 
 当前内置课程共 1834 项：65 首古诗、11 篇经典古文、665 个常用字、240 道六阶数学任务、26 个英文字母、270 个主题词、12 本原创启蒙绘本、443 个描红目标和 102 个科学任务。英语先按每天 2 个新字母学习 A–Z，穿插已学字母复习；认识全部 26 个字母后，再进入主题词和每周 3 本绘本。
 
@@ -69,21 +71,12 @@ docker run --rm -p 8080:80 lexue:local
 - 国学、识字、数学、英语、科学模块完成后分别获得 2 星光、1 粮食和 2 经验；控笔获得 1 星光、0.5 粮食和 1 经验。
 - 同一日期、模块和任务使用固定完成键，重复点击或刷新不会重复发奖。
 - 每 100 经验提升一级宠物外观；完成 5、20、50、100、200 个模块时获得里程碑勋章。
-- 数学任务内置 0–1000 数字探索：支持 ±1、±10、滑动选数、随机数字、中英文展示、百位里程碑庆祝和完全离线的中英文组合朗读。
+- 数学任务内置 0–1000 数字探索：支持 ±1、±10、滑动选数、随机数字、中英文展示、百位里程碑庆祝和在线中英文整句朗读。
 
-## 离线数字语音
+## 在线语音朗读
 
-数字模块不依赖外部 HTML 页面、网络接口或系统 TTS。`public/audio/numbers/` 中的 44 个中英文词元可以组合朗读 0–1000 的全部整数，并由 Service Worker 预缓存。665 个内置常用字的讲读音频位于 `public/audio/literacy/`，26 个字母和例词的读音位于 `public/audio/english/`。字母音频直接朗读具体字母，不朗读“uppercase/lowercase”标签，并在两个字母和例词之间保留适合跟读的停顿。
+默认模型为 `qwen-audio-3.0-tts-flash`。配置模板见 [.env.example](.env.example)，详细接入与部署见 [在线语音配置](docs/在线语音配置.md)。
 
-在 macOS 上需要重新生成语音时运行：
+服务端 `TTS_PROVIDER` 可设置为 `qwen`、`doubao`、`minimax`。配置修改后重启服务即可切换，密钥不进入前端构建。数字按完整中英文文本合成，汉字、字母、国学和其他课程统一调用在线接口；已删除离线音频、生成脚本和词元拼接。断网时课程与进度仍可使用，朗读显示联网提示。
 
-```bash
-pnpm audio:numbers
-pnpm audio:literacy
-pnpm audio:letters
-pnpm audio:guoxue
-# 或一次生成全部语音
-pnpm audio:all
-```
-
-脚本使用系统 `say` 和本机 `ffmpeg` 生成 MP3。应用构建和运行不需要这两个工具，只需保留已经生成的音频文件。
+生产环境使用 Node.js 22.16+，运行 `pnpm build` 后用 `pnpm start` 启动（默认端口 80；示例配置为 8080）。Docker 已包含 Node 服务。纯静态 ZIP 不包含语音服务。

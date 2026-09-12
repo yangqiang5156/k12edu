@@ -10,3 +10,6 @@ coverage
 *.tsbuildinfo
 npm-debug.log*
 pnpm-debug.log*
+
+.env
+.env.*

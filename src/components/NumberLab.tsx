@@ -1,34 +1,38 @@
-import { useEffect, useMemo, useState } from 'react';
-import { playOfflineNumberTokens, stopOfflineNumberAudio } from '../audio';
-import { numberAudioTokens, numberToChinese, numberToEnglish, type NumberAudioLanguage } from '../logic';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { speak, stopSpeech, speechError } from '../audio';
+import { numberSpeechText, numberToChinese, numberToEnglish, type NumberAudioLanguage } from '../logic';
 
 const decorations = ['🐼', '🚗', '🦖', '🚀', '🐳', '🌈', '🦊', '⚽', '🐯', '🎈', '🐙', '🦁'];
 const accents = ['#745fd7', '#e97083', '#43a785', '#e59b30', '#4e98cc', '#9a65c7'];
 
 export function NumberLab({ soundEnabled }: { soundEnabled: boolean }) {
+  const readJob = useRef(0);
   const [number, setNumber] = useState(0);
   const [reading, setReading] = useState(false);
-  const [status, setStatus] = useState('本地中英文语音已准备好');
+  const [status, setStatus] = useState('点数字听在线中英文朗读');
   const [celebration, setCelebration] = useState(0);
   const chinese = useMemo(() => numberToChinese(number), [number]);
   const english = useMemo(() => numberToEnglish(number), [number]);
 
-  useEffect(() => stopOfflineNumberAudio, []);
+  useEffect(() => () => { readJob.current += 1; stopSpeech(); }, []);
 
   const read = async (value = number, language: NumberAudioLanguage = 'both') => {
     if (!soundEnabled) {
       setStatus('声音已由家长关闭');
       return;
     }
+    const job = ++readJob.current;
     setReading(true);
     setStatus(language === 'zh' ? '正在读中文…' : language === 'en' ? 'Reading in English…' : '正在读中文和英文…');
     try {
-      await playOfflineNumberTokens(numberAudioTokens(value, language), true);
+      await speak(numberSpeechText(value, language), true, language === 'both' ? 'auto' : language);
+      if (job !== readJob.current) return;
       setStatus('读完啦，再点一次可以重听');
-    } catch {
-      setStatus('语音加载失败，请重新打开应用后再试');
+    } catch (error) {
+      if (job !== readJob.current) return;
+      setStatus(speechError(error));
     } finally {
-      setReading(false);
+      if (job === readJob.current) setReading(false);
     }
   };
 
@@ -37,13 +41,14 @@ export function NumberLab({ soundEnabled }: { soundEnabled: boolean }) {
     setNumber(next);
     if (next > 0 && next % 100 === 0) setCelebration((current) => current + 1);
     if (autoRead) void read(next);
+    else { readJob.current += 1; stopSpeech(); setReading(false); setStatus('点数字听在线中英文朗读'); }
   };
 
   return (
     <div className="number-lab" style={{ '--number-accent': accents[Math.floor(number / 50) % accents.length] } as React.CSSProperties}>
       <div className="number-lab-heading">
         <span className="eyebrow">0–1000 数字探索</span>
-        <span className="offline-audio-badge">● 离线语音</span>
+        <span className="online-audio-badge">● 在线朗读</span>
       </div>
       <button className="number-stage" onClick={() => void read()} aria-label={`朗读数字 ${number}`}>
         <span className="number-decoration">{decorations[number % decorations.length]}</span>

@@ -1,11 +1,18 @@
+import { loadEnv } from 'vite';
+import { createTtsMiddleware } from './server/tts.mjs';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: './',
   plugins: [
     react(),
+    {
+      name: 'online-tts',
+      configureServer(server) { server.middlewares.use(createTtsMiddleware({ ...loadEnv(mode, process.cwd(), ''), ...process.env })); },
+      configurePreviewServer(server) { server.middlewares.use(createTtsMiddleware({ ...loadEnv(mode, process.cwd(), ''), ...process.env })); },
+    },
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
@@ -28,11 +35,12 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/\/api\//],
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
-        globPatterns: ['**/*.{js,css,html,svg,png,mp3,woff2}']
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2}']
       }
     })
   ]
-});
+}));

@@ -333,49 +333,9 @@ export function numberToEnglish(n: number): string {
 
 export type NumberAudioLanguage = 'zh' | 'en' | 'both';
 
-export function chineseNumberAudioTokens(number: number): string[] {
-  if (number === 0) return ['zh_0'];
-  if (number === 1000) return ['zh_1', 'zh_thousand'];
-  const tokens: string[] = [];
-  const original = number;
-  if (number >= 100) {
-    tokens.push(`zh_${Math.floor(number / 100)}`, 'zh_hundred');
-    number %= 100;
-    if (number > 0 && number < 10) tokens.push('zh_0');
-  }
-  const tens = Math.floor(number / 10);
-  const ones = number % 10;
-  if (tens > 0) {
-    if (tens !== 1 || original >= 100) tokens.push(`zh_${tens}`);
-    tokens.push('zh_ten');
-  }
-  if (ones > 0) tokens.push(`zh_${ones}`);
-  return tokens;
-}
-
-function englishUnderHundredAudioTokens(number: number): string[] {
-  if (number < 20) return [`en_${number}`];
-  const tokens = [`en_${Math.floor(number / 10) * 10}`];
-  if (number % 10) tokens.push(`en_${number % 10}`);
-  return tokens;
-}
-
-export function englishNumberAudioTokens(number: number): string[] {
-  if (number === 0) return ['en_0'];
-  if (number === 1000) return ['en_1', 'en_thousand'];
-  const tokens: string[] = [];
-  if (number >= 100) {
-    tokens.push(`en_${Math.floor(number / 100)}`, 'en_hundred');
-    number %= 100;
-    if (number) tokens.push('en_and');
-  }
-  if (number) tokens.push(...englishUnderHundredAudioTokens(number));
-  return tokens;
-}
-
-export function numberAudioTokens(number: number, language: NumberAudioLanguage = 'both'): string[] {
-  if (!Number.isInteger(number) || number < 0 || number > 1000) return [];
-  const chinese = language === 'en' ? [] : chineseNumberAudioTokens(number);
-  const english = language === 'zh' ? [] : englishNumberAudioTokens(number);
-  return [...chinese, ...english];
+export function numberSpeechText(number: number, language: NumberAudioLanguage = 'both'): string {
+  if (!Number.isInteger(number) || number < 0 || number > 1000) return '';
+  if (language === 'zh') return numberToChinese(number);
+  if (language === 'en') return numberToEnglish(number);
+  return `${numberToChinese(number)}。${numberToEnglish(number)}.`;
 }

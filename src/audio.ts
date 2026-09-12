@@ -1,9 +1,4 @@
 let context: AudioContext | undefined;
-let numberAudio: HTMLAudioElement | undefined;
-let numberAudioJob = 0;
-let lessonAudio: HTMLAudioElement | undefined;
-let lessonAudioJob = 0;
-
 export function playClick(enabled: boolean): void {
   if (!enabled) return;
   context ??= new AudioContext();
@@ -19,71 +14,56 @@ export function playClick(enabled: boolean): void {
   oscillator.stop(context.currentTime + 0.09);
 }
 
-export function speak(text: string, enabled: boolean, lang = 'zh-CN'): void {
-  if (!enabled || !('speechSynthesis' in window)) return;
-  speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = lang;
-  utterance.rate = 0.78;
-  utterance.pitch = 1.15;
-  speechSynthesis.speak(utterance);
+let cancelCurrent: (() => void) | undefined;
+
+export function stopSpeech(): void {
+  cancelCurrent?.();
+  cancelCurrent = undefined;
 }
 
-export async function playOfflineNumberTokens(tokens: string[], enabled: boolean): Promise<void> {
-  if (!enabled || !tokens.length) return;
-  const job = ++numberAudioJob;
-  numberAudio ??= new Audio();
-  numberAudio.preload = 'auto';
-  numberAudio.pause();
-
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (job !== numberAudioJob) return;
-    const token = tokens[index];
-    numberAudio.src = `${import.meta.env.BASE_URL}audio/numbers/${token}.mp3`;
-    numberAudio.currentTime = 0;
-    await new Promise<void>((resolve, reject) => {
-      const finish = () => { cleanup(); resolve(); };
-      const fail = () => { cleanup(); reject(new Error(`无法播放离线语音：${token}`)); };
-      const cleanup = () => {
-        numberAudio?.removeEventListener('ended', finish);
-        numberAudio?.removeEventListener('error', fail);
-      };
-      numberAudio?.addEventListener('ended', finish, { once: true });
-      numberAudio?.addEventListener('error', fail, { once: true });
-      numberAudio?.play().catch(fail);
+export async function speak(text: string, enabled: boolean, language = 'auto'): Promise<void> {
+  stopSpeech();
+  if (!enabled || !text.trim()) return;
+  const controller = new AbortController();
+  const audio = new Audio();
+  let url: string | undefined;
+  let rejectPlayback: ((reason: unknown) => void) | undefined;
+  const cancel = () => {
+    controller.abort();
+    audio.pause();
+    rejectPlayback?.(new DOMException('朗读已取消', 'AbortError'));
+  };
+  cancelCurrent = cancel;
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}api/tts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, language }), signal: controller.signal,
     });
-    if (index < tokens.length - 1) await new Promise((resolve) => window.setTimeout(resolve, token.startsWith('zh_') && tokens[index + 1]?.startsWith('en_') ? 180 : 25));
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || '语音服务暂时不可用，请稍后再试');
+    }
+    const blob = await response.blob();
+    controller.signal.throwIfAborted();
+    url = URL.createObjectURL(blob);
+    audio.src = url;
+    await new Promise<void>((resolve, reject) => {
+      rejectPlayback = reject;
+      audio.onended = () => resolve();
+      audio.onerror = () => reject(new Error('音频播放失败，请重试'));
+      audio.play().catch(reject);
+    });
+  } finally {
+    audio.pause();
+    audio.onended = null;
+    audio.onerror = null;
+    audio.removeAttribute('src');
+    if (url) URL.revokeObjectURL(url);
+    if (cancelCurrent === cancel) cancelCurrent = undefined;
   }
 }
 
-export function stopOfflineNumberAudio(): void {
-  numberAudioJob += 1;
-  numberAudio?.pause();
-}
-
-export async function playOfflineLessonAudio(relativePath: string, enabled: boolean): Promise<void> {
-  if (!enabled) return;
-  const job = ++lessonAudioJob;
-  lessonAudio ??= new Audio();
-  lessonAudio.preload = 'auto';
-  lessonAudio.pause();
-  lessonAudio.src = `${import.meta.env.BASE_URL}${relativePath}`;
-  lessonAudio.currentTime = 0;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => { cleanup(); resolve(); };
-    const fail = () => { cleanup(); reject(new Error(`无法播放离线语音：${relativePath}`)); };
-    const cleanup = () => {
-      lessonAudio?.removeEventListener('ended', finish);
-      lessonAudio?.removeEventListener('error', fail);
-    };
-    lessonAudio?.addEventListener('ended', finish, { once: true });
-    lessonAudio?.addEventListener('error', fail, { once: true });
-    lessonAudio?.play().catch(fail);
-  });
-  if (job !== lessonAudioJob) return;
-}
-
-export function stopOfflineLessonAudio(): void {
-  lessonAudioJob += 1;
-  lessonAudio?.pause();
+export function speechError(error: unknown): string {
+  if (!navigator.onLine) return '朗读需要联网，请检查网络连接';
+  return error instanceof Error ? error.message : '朗读失败，请稍后重试';
 }
