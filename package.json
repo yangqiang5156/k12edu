@@ -1,7 +1,7 @@
 {
   "name": "lexue-workbench",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -9,11 +9,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "test:watch": "vitest",
-    "audio:numbers": "bash scripts/generate-number-audio.sh",
-    "audio:literacy": "bash scripts/generate-literacy-audio.sh",
-    "audio:letters": "bash scripts/generate-english-letter-audio.sh",
-    "audio:guoxue": "bash scripts/generate-guoxue-audio.sh",
-    "audio:all": "pnpm audio:numbers && pnpm audio:literacy && pnpm audio:letters && pnpm audio:guoxue"
+    "start": "node --env-file-if-exists=.env server/index.mjs"
   },
   "dependencies": {
     "idb": "^8.0.3",
