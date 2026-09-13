@@ -1,3 +1,4 @@
+import { dailyContentCount } from './types';
 import type {
   AppData,
   BackupEnvelopeV1,
@@ -14,7 +15,7 @@ import type {
 } from './types';
 
 export const REVIEW_INTERVALS = [1, 3, 7, 14, 30];
-export const DAILY_PLAN_CURRICULUM_VERSION = 2;
+export const DAILY_PLAN_CURRICULUM_VERSION = 3;
 
 export function localDateKey(date = new Date()): string {
   const year = date.getFullYear();
@@ -50,7 +51,7 @@ export function unlockedClassicCount(poemCount: number): number {
   return Math.floor(poemCount / 10);
 }
 
-function toDailyItem(item: ContentItem, date: string, suffix = ''): DailyItem {
+function toDailyItem(item: ContentItem, date: string, suffix = '', isReview = false): DailyItem {
   return {
     id: `${date}-${item.id}${suffix}`,
     contentId: item.id,
@@ -59,7 +60,8 @@ function toDailyItem(item: ContentItem, date: string, suffix = ''): DailyItem {
     kind: item.kind,
     prompt: item.prompt,
     answer: item.answer,
-    options: item.options
+    options: item.options,
+    isReview
   };
 }
 
@@ -68,14 +70,51 @@ function pickCircular<T>(items: T[], start: number, count: number): T[] {
   return Array.from({ length: Math.min(count, items.length) }, (_, index) => items[(start + index) % items.length]);
 }
 
-function moduleTask(date: string, module: ModuleId, title: string, items: ContentItem[]): DailyModuleTask {
+function moduleTask(date: string, module: ModuleId, newItems: ContentItem[], reviewItems: ContentItem[], prefix = ''): DailyModuleTask {
+  const title = [prefix, newItems.length ? `${newItems.length}个新内容` : '', reviewItems.length ? `${reviewItems.length}个记忆复习` : ''].filter(Boolean).join(' · ');
   return {
     id: `${date}-${module}`,
     module,
     title,
-    items: items.map((item, index) => toDailyItem(item, date, `-${index}`)),
+    items: [
+      ...newItems.map((item, index) => toDailyItem(item, date, `-new-${index}`)),
+      ...reviewItems.map((item, index) => toDailyItem(item, date, `-review-${index}`, true))
+    ],
     doneItemIds: []
   };
+}
+
+interface ContentLearningHistory {
+  firstDate: string;
+  completionDates: Set<string>;
+}
+
+function learningHistoryBefore(date: string, completions: CompletionEvent[]): Map<string, ContentLearningHistory> {
+  const history = new Map<string, ContentLearningHistory>();
+  for (const event of completions.filter((entry) => entry.date < date).sort((a, b) => a.date.localeCompare(b.date))) {
+    for (const contentId of event.contentIds) {
+      const existing = history.get(contentId);
+      if (existing) existing.completionDates.add(event.date);
+      else history.set(contentId, { firstDate: event.date, completionDates: new Set([event.date]) });
+    }
+  }
+  return history;
+}
+
+function daysBetween(start: string, end: string): number {
+  return daySeed(end) - daySeed(start);
+}
+
+function dueReviewItems(date: string, items: ContentItem[], history: Map<string, ContentLearningHistory>): ContentItem[] {
+  return items.flatMap((item) => {
+    const learned = history.get(item.id);
+    if (!learned) return [];
+    const overdueInterval = REVIEW_INTERVALS.find((interval) => {
+      const dueDate = datePlusDays(learned.firstDate, interval);
+      return dueDate <= date && !Array.from(learned.completionDates).some((completionDate) => completionDate >= dueDate);
+    });
+    return overdueInterval === undefined ? [] : [{ item, overdueBy: daysBetween(datePlusDays(learned.firstDate, overdueInterval), date) }];
+  }).sort((a, b) => b.overdueBy - a.overdueBy || a.item.id.localeCompare(b.item.id)).map(({ item }) => item);
 }
 
 export function generateDailyPlan(
@@ -89,73 +128,54 @@ export function generateDailyPlan(
   const seed = daySeed(date);
   const isActiveDay = settings.activeWeekdays.includes(weekday);
   const enabled = new Set(settings.enabledModules);
+  const history = learningHistoryBefore(date, completions);
+  const learnedIds = new Set(history.keys());
   const byModule = (module: ModuleId, kind?: ContentItem['kind']) => content.filter(
     (item) => item.module === module && (!kind || item.kind === kind)
   );
   const modules: DailyModuleTask[] = [];
 
-  if (isActiveDay && enabled.has('guoxue')) {
-    const poems = byModule('guoxue', 'poem');
-    const classics = byModule('guoxue', 'classic');
-    const isNewDay = [1, 3, 5].includes(weekday);
-    const poemIndex = Math.abs(seed * 3 + weekday) % Math.max(1, poems.length);
-    const selected = pickCircular(poems, isNewDay ? poemIndex : Math.max(0, poemIndex - 1), isNewDay ? 1 : 2);
-    const unlockedClassics = unlockedClassicCount(masteredPoemCount(completions));
-    if (unlockedClassics > 0 && weekday === 5 && classics.length) {
-      selected.push(classics[Math.min(unlockedClassics, classics.length) - 1]);
+  if (isActiveDay) for (const module of settings.enabledModules) {
+    if (!enabled.has(module)) continue;
+    const allModuleItems = byModule(module);
+    const count = dailyContentCount(settings, module);
+    let newPool = allModuleItems;
+    let prefix = '';
+
+    if (module === 'guoxue') {
+      const poems = byModule('guoxue', 'poem');
+      const classics = byModule('guoxue', 'classic').slice(0, unlockedClassicCount(masteredPoemCount(completions.filter((event) => event.date < date))));
+      newPool = [...poems, ...classics];
+      prefix = '国学积累';
+    } else if (module === 'math') {
+      const completedMath = completions.filter((event) => event.module === 'math' && event.date < date).length;
+      const stage = Math.min(6, Math.floor(completedMath / 10) + 1);
+      newPool = byModule('math', 'math-choice').filter((item) => item.stage === stage);
+      prefix = `第${stage}阶`;
+    } else if (module === 'english') {
+      const letters = byModule('english', 'letter');
+      const learnedLetterCount = letters.filter((item) => learnedIds.has(item.id)).length;
+      const words = byModule('english', 'word');
+      const readers = byModule('english', 'reader');
+      const preferredReader = [1, 3, 5].includes(weekday)
+        ? pickCircular(readers.filter((item) => !learnedIds.has(item.id)), Math.abs(seed), 1)
+        : [];
+      newPool = learnedLetterCount < letters.length ? letters : [...preferredReader, ...words, ...readers.filter((item) => !preferredReader.includes(item))];
+      prefix = learnedLetterCount < letters.length ? `字母启蒙 ${learnedLetterCount}/${letters.length}` : '英语积累';
+    } else if (module === 'literacy') prefix = '识字积累';
+    else if (module === 'writing') prefix = '慢慢描一描';
+    else if (module === 'science') prefix = '小小科学家';
+
+    const unseen = newPool.filter((item) => !learnedIds.has(item.id));
+    const newItems = module === 'english'
+      ? unseen.slice(0, count)
+      : pickCircular(unseen, Math.abs(seed * 7 + settings.enabledModules.indexOf(module) * 11), count);
+    const selectedIds = new Set(newItems.map((item) => item.id));
+    let reviews = dueReviewItems(date, allModuleItems, history).filter((item) => !selectedIds.has(item.id)).slice(0, count);
+    if (!newItems.length && !reviews.length) {
+      reviews = pickCircular(allModuleItems.filter((item) => learnedIds.has(item.id)), Math.abs(seed), count);
     }
-    modules.push(moduleTask(date, 'guoxue', isNewDay ? '新诗轻轻读' : '古诗再见面', selected));
-  }
-
-  if (isActiveDay && enabled.has('literacy')) {
-    const chars = byModule('literacy', 'character');
-    const start = Math.abs(seed * 2) % Math.max(1, chars.length);
-    const selected = pickCircular(chars, start, 2);
-    const review = pickCircular(chars, Math.max(0, start - 6), 2);
-    modules.push(moduleTask(date, 'literacy', '2个新字 + 旧字复习', [...selected, ...review]));
-  }
-
-  if (isActiveDay && enabled.has('math')) {
-    const maths = byModule('math', 'math-choice');
-    const completedMath = completions.filter((event) => event.module === 'math').length;
-    const stage = Math.min(6, Math.floor(completedMath / 10) + 1);
-    const stageItems = maths.filter((item) => item.stage === stage);
-    modules.push(moduleTask(date, 'math', `第${stage}阶 · 趣味数学`, pickCircular(stageItems, seed, seed % 2 ? 3 : 2)));
-  }
-
-  if (isActiveDay && enabled.has('english')) {
-    const letters = byModule('english', 'letter');
-    const words = byModule('english', 'word');
-    const readers = byModule('english', 'reader');
-    const learnedLetterIds = new Set(
-      completions.flatMap((event) => event.module === 'english'
-        ? event.contentIds.filter((id) => id.startsWith('letter-'))
-        : [])
-    );
-    if (letters.length && learnedLetterIds.size < letters.length) {
-      const newLetters = letters.filter((item) => !learnedLetterIds.has(item.id)).slice(0, 2);
-      const reviews = letters.filter((item) => learnedLetterIds.has(item.id)).slice(-2);
-      modules.push(moduleTask(
-        date,
-        'english',
-        `字母启蒙 · 已认识 ${learnedLetterIds.size}/${letters.length}`,
-        [...newLetters, ...reviews]
-      ));
-    } else {
-      const selected = pickCircular(words, seed * 3, 3);
-      if ([1, 3, 5].includes(weekday) && readers.length) selected.push(readers[Math.abs(seed) % readers.length]);
-      modules.push(moduleTask(date, 'english', [1, 3, 5].includes(weekday) ? '单词 + 绘本朗读' : '主题单词复习', selected));
-    }
-  }
-
-  if (isActiveDay && enabled.has('writing')) {
-    const traces = byModule('writing', 'trace');
-    modules.push(moduleTask(date, 'writing', '慢慢描一描', pickCircular(traces, seed * 4, 4)));
-  }
-
-  if (isActiveDay && enabled.has('science') && [2, 4].includes(weekday)) {
-    const science = byModule('science', 'science');
-    modules.push(moduleTask(date, 'science', '5分钟小观察', pickCircular(science, seed, 1)));
+    if (newItems.length || reviews.length) modules.push(moduleTask(date, module, newItems, reviews, prefix));
   }
 
   return { date, generatedAt: new Date().toISOString(), curriculumVersion: DAILY_PLAN_CURRICULUM_VERSION, isActiveDay, modules };
@@ -166,13 +186,24 @@ export function regenerateDailyPlanForSettings(
   settings: ParentSettings,
   content: ContentItem[],
   completions: CompletionEvent[],
-  existingPlan?: DailyPlan
+  existingPlan?: DailyPlan,
+  previousSettings?: ParentSettings
 ): DailyPlan {
   const freshPlan = generateDailyPlan(date, settings, content, completions);
   if (!existingPlan) return freshPlan;
 
   const previousModules = new Map(existingPlan.modules.map((module) => [module.module, module]));
-  freshPlan.modules = freshPlan.modules.map((module) => previousModules.get(module.module) ?? module);
+  const schedulingChanged = previousSettings ? (
+    previousSettings.activeWeekdays.join(',') !== settings.activeWeekdays.join(',')
+    || previousSettings.enabledModules.join(',') !== settings.enabledModules.join(',')
+    || settings.enabledModules.some((module) => dailyContentCount(previousSettings, module) !== dailyContentCount(settings, module))
+  ) : false;
+  freshPlan.modules = freshPlan.modules.map((module) => {
+    const previous = previousModules.get(module.module);
+    if (!previous) return module;
+    if (!schedulingChanged || previous.collectedAt || previous.doneItemIds.length) return previous;
+    return module;
+  });
   if (freshPlan.modules.length > 0 && freshPlan.modules.every((module) => module.collectedAt)) {
     freshPlan.completedAt = existingPlan.completedAt;
   }

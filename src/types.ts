@@ -41,6 +41,7 @@ export interface ParentSettings {
   childName: string;
   activeWeekdays: number[];
   enabledModules: ModuleId[];
+  dailyContentCounts?: Partial<Record<ModuleId, number>>;
   soundEnabled: boolean;
   reduceMotion: boolean;
   petId: 'stella' | 'archie' | 'marie';
@@ -58,6 +59,7 @@ export interface DailyItem {
   prompt?: string;
   answer?: string;
   options?: string[];
+  isReview?: boolean;
 }
 
 export interface DailyModuleTask {
@@ -179,3 +181,17 @@ export const MODULE_META: Record<ModuleId, { title: string; icon: string; color:
   writing: { title: '控笔', icon: '✍️', color: '#ae8deb', target: 300 },
   science: { title: '科学', icon: '🔬', color: '#ef81a9', target: 100 }
 };
+
+export const DEFAULT_DAILY_CONTENT_COUNTS: Record<ModuleId, number> = {
+  guoxue: 1,
+  literacy: 2,
+  math: 2,
+  english: 2,
+  writing: 4,
+  science: 1
+};
+
+export function dailyContentCount(settings: Pick<ParentSettings, 'dailyContentCounts'>, module: ModuleId): number {
+  const value = settings.dailyContentCounts?.[module] ?? DEFAULT_DAILY_CONTENT_COUNTS[module];
+  return Number.isInteger(value) ? Math.max(1, Math.min(10, value)) : DEFAULT_DAILY_CONTENT_COUNTS[module];
+}

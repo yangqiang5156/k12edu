@@ -1,8 +1,10 @@
-import { useRef, useState, type ChangeEvent } from 'react';
-import { MODULE_META, type AppData, type ContentItem, type ModuleId, type ParentSettings, type Redemption, type RewardDefinition, type Wallet } from '../types';
+import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { dailyContentCount, MODULE_META, type AppData, type ContentItem, type ModuleId, type ParentSettings, type Redemption, type RewardDefinition, type Wallet } from '../types';
 import { calculateWallet, completedDaysThisWeek, localDateKey } from '../logic';
 import { formatContentAge } from '../content-library';
 import { ContentLibraryManager } from './ContentLibraryManager';
+import { LearningHistory } from './LearningHistory';
+import { learnedContentIds as collectLearnedContentIds } from '../learning-history';
 
 interface Props {
   data: AppData;
@@ -22,7 +24,7 @@ interface Props {
 }
 
 const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六'];
-type Tab = 'overview' | 'settings' | 'rewards' | 'data';
+type Tab = 'overview' | 'settings' | 'history' | 'rewards' | 'data';
 
 export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption, onSaveReward, onAdjustWallet, onRemoveTaskItem, onAddLibraryTask, onSaveContent, onDeleteContent, onExport, onImportBackup, onImportContent, onClear }: Props) {
   const [tab, setTab] = useState<Tab>('overview');
@@ -43,6 +45,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
   const todayPlan = data.plans.find((plan) => plan.date === today);
   const pending = data.redemptions.filter((item) => item.status === 'pending');
   const completedCount = todayPlan?.modules.filter((item) => item.collectedAt).length ?? 0;
+  const learnedContentIds = useMemo(() => collectLearnedContentIds(data.plans, data.completions), [data.plans, data.completions]);
 
   const fileHandler = (handler: (file: File) => Promise<void>) => async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -57,7 +60,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         <div><span className="eyebrow">家长中心</span><h1>{draft.childName}的成长看板</h1></div>
       </header>
       <nav className="parent-tabs">
-        {([['overview', '看板'], ['settings', '任务'], ['rewards', '奖励'], ['data', '数据']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
+        {([['overview', '看板'], ['settings', '任务'], ['history', '历史'], ['rewards', '奖励'], ['data', '数据']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
       </nav>
 
       {tab === 'overview' && <main className="parent-body">
@@ -80,7 +83,16 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         <section className="parent-card form-card"><h2>学习设置</h2>
           <label>孩子昵称<input value={draft.childName} maxLength={8} onChange={(e) => setDraft({ ...draft, childName: e.target.value })} /></label>
           <span className="field-label">每周学习日</span><div className="toggle-row">{weekdayLabels.map((label, day) => <button key={day} className={draft.activeWeekdays.includes(day) ? 'selected' : ''} onClick={() => setDraft({ ...draft, activeWeekdays: draft.activeWeekdays.includes(day) ? draft.activeWeekdays.filter((value) => value !== day) : [...draft.activeWeekdays, day].sort() })}>周{label}</button>)}</div>
-          <span className="field-label">开启的模块</span>{Object.entries(MODULE_META).map(([id, meta]) => <label className="switch-row" key={id}><span>{meta.icon} {meta.title}</span><input type="checkbox" checked={draft.enabledModules.includes(id as ModuleId)} onChange={(e) => setDraft({ ...draft, enabledModules: e.target.checked ? [...draft.enabledModules, id as ModuleId] : draft.enabledModules.filter((module) => module !== id) })} /></label>)}
+          <span className="field-label">开启的模块与每日内容</span>
+          <p className="setting-hint">设置每天新增几个内容；系统会另外按第 1、3、7、14、30 天安排适量复习。</p>
+          {Object.entries(MODULE_META).map(([id, meta]) => {
+            const moduleId = id as ModuleId;
+            const enabled = draft.enabledModules.includes(moduleId);
+            return <div className={`module-setting-row ${enabled ? 'enabled' : ''}`} key={id}>
+              <label className="switch-row"><span>{meta.icon} {meta.title}</span><input aria-label={`开启${meta.title}`} type="checkbox" checked={enabled} onChange={(e) => setDraft({ ...draft, enabledModules: e.target.checked ? [...draft.enabledModules, moduleId] : draft.enabledModules.filter((module) => module !== moduleId) })} /></label>
+              <label className="daily-count-field"><span>每日新内容</span><input aria-label={`${meta.title}每日新内容数`} type="number" min="1" max="10" step="1" disabled={!enabled} value={dailyContentCount(draft, moduleId)} onChange={(event) => setDraft({ ...draft, dailyContentCounts: { ...draft.dailyContentCounts, [moduleId]: Math.max(1, Math.min(10, Math.round(Number(event.target.value) || 1))) } })} /><b>个</b></label>
+            </div>;
+          })}
           <label className="switch-row"><span>🔊 按钮和朗读声音</span><input type="checkbox" checked={draft.soundEnabled} onChange={(e) => setDraft({ ...draft, soundEnabled: e.target.checked })} /></label>
           <label className="switch-row"><span>🌿 减少动态效果</span><input type="checkbox" checked={draft.reduceMotion} onChange={(e) => setDraft({ ...draft, reduceMotion: e.target.checked })} /></label>
           <span className="field-label">学习伙伴</span><div className="pet-picker">{([['stella', '小兔子', '🐰'], ['archie', '阿奇', '🐶'], ['marie', '玛丽猫', '🐱']] as const).map(([id, name, icon]) => <button key={id} className={draft.petId === id ? 'selected' : ''} onClick={() => setDraft({ ...draft, petId: id })}>{icon}<span>{name}</span></button>)}</div>
@@ -107,7 +119,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
                   await onAddLibraryTask(task.id, content);
                   setLibraryPickerTaskId(undefined);
                   setLibrarySearch('');
-                }}><strong>{content.title}</strong><span>{formatContentAge(content)} · {content.subtitle ?? content.body?.split('\n')[0] ?? '资料库内容'}</span><b>添加</b></button>)}
+                }}><strong>{content.title}</strong><span>{learnedContentIds.has(content.id) ? '✓ 已学过' : '○ 未学习'} · {formatContentAge(content)} · {content.subtitle ?? content.body?.split('\n')[0] ?? '资料库内容'}</span><b>添加</b></button>)}
                 {!candidates.length && <p>没有找到可添加的资料，可能已经全部加入今日任务。</p>}
               </div>
               {candidates.length === 40 && <small>当前显示前40条，请输入关键词缩小范围。</small>}
@@ -115,6 +127,8 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
           </div>})}
         </section>
       </main>}
+
+      {tab === 'history' && <LearningHistory plans={data.plans} completions={data.completions} totalContent={data.content.length} />}
 
       {tab === 'rewards' && <main className="parent-body">
         {pending.length > 0 && <section className="parent-card pending-card"><h2>待确认兑换</h2>{pending.map((item) => <div className="pending-row" key={item.id}><span>{item.rewardTitle}</span><div><button onClick={() => onResolveRedemption(item, false)}>拒绝</button><button className="approve" onClick={() => onResolveRedemption(item, true)}>同意</button></div></div>)}</section>}
@@ -127,7 +141,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         <section className="parent-card"><h2>兑换标准</h2>{data.rewardDefinitions.map((reward) => <div className="reward-edit" key={reward.id}><span>{reward.icon}</span><input value={reward.title} onChange={(e) => onSaveReward({ ...reward, title: e.target.value })} /><input type="number" min="1" value={reward.cost} onChange={(e) => onSaveReward({ ...reward, cost: Math.max(1, Number(e.target.value)) })} /><small>{reward.currency === 'stars' ? '星光' : '勋章'}</small></div>)}</section>
       </main>}
 
-      {tab === 'data' && contentManagerOpen && <ContentLibraryManager content={data.content} onSave={onSaveContent} onDelete={onDeleteContent} onClose={() => setContentManagerOpen(false)} />}
+      {tab === 'data' && contentManagerOpen && <ContentLibraryManager content={data.content} learnedContentIds={learnedContentIds} onSave={onSaveContent} onDelete={onDeleteContent} onClose={() => setContentManagerOpen(false)} />}
 
       {tab === 'data' && !contentManagerOpen && <main className="parent-body">
         <section className="parent-card"><h2>内容库</h2>

@@ -16,6 +16,7 @@ import type {
   RewardDefinition,
   RewardLedgerEntry
 } from './types';
+import { DEFAULT_DAILY_CONTENT_COUNTS } from './types';
 
 interface LexueDB extends DBSchema {
   settings: { key: string; value: ParentSettings };
@@ -34,6 +35,7 @@ export const DEFAULT_SETTINGS: ParentSettings = {
   childName: '乐乐',
   activeWeekdays: [1, 2, 3, 4, 5],
   enabledModules: ['guoxue', 'literacy', 'math', 'english', 'writing', 'science'],
+  dailyContentCounts: DEFAULT_DAILY_CONTENT_COUNTS,
   soundEnabled: true,
   reduceMotion: false,
   petId: 'stella'
@@ -82,6 +84,13 @@ export async function seedDatabase(): Promise<void> {
       pinPolicyVersion: PIN_POLICY_VERSION,
       pinSalt: salt,
       pinHash: await hashPin(DEFAULT_PARENT_PIN, salt)
+    }, 'parent');
+  }
+  const currentSettings = await db.get('settings', 'parent');
+  if (currentSettings && (!currentSettings.dailyContentCounts || Object.keys(DEFAULT_DAILY_CONTENT_COUNTS).some((module) => currentSettings.dailyContentCounts?.[module as keyof typeof DEFAULT_DAILY_CONTENT_COUNTS] === undefined))) {
+    await db.put('settings', {
+      ...currentSettings,
+      dailyContentCounts: { ...DEFAULT_DAILY_CONTENT_COUNTS, ...currentSettings.dailyContentCounts }
     }, 'parent');
   }
   const builtInPack = await db.get('contentPacks', 'builtin-curriculum');

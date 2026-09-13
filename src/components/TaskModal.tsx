@@ -3,6 +3,7 @@ import { speak, stopSpeech, speechError } from '../audio';
 import { MODULE_META, type DailyModuleTask } from '../types';
 import { TraceCanvas } from './TraceCanvas';
 import { NumberLab } from './NumberLab';
+import { lessonSpeechRequest } from '../lesson-speech';
 
 interface Props {
   task: DailyModuleTask;
@@ -76,15 +77,11 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
       return;
     }
     const job = ++readJob.current;
-    const text = item.kind === 'letter'
-      ? `${letterUpper}. ${letterUpper}. ${letterExample ?? ''}.`
-      : item.kind === 'character'
-        ? `${item.title}。这个字读，${item.title}。`
-        : `${item.title}。${lessonDetail ?? ''}`;
+    const speechRequest = lessonSpeechRequest(item, lessonDetail);
     setAudioPlaying(true);
     setAudioStatus('正在准备在线朗读…');
     try {
-      await speak(text, true, 'auto');
+      await speak(speechRequest.text, true, speechRequest.language);
       if (job === readJob.current) setAudioStatus('朗读完成，再点一次可以重听');
     } catch (error) {
       if (job === readJob.current) setAudioStatus(speechError(error));
@@ -98,7 +95,7 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
       <section className="task-modal" role="dialog" aria-modal="true" aria-label={task.title}>
         <header className="modal-header">
           <button className="icon-button" onClick={onClose} aria-label="关闭">×</button>
-          <div><span>{meta.icon} {meta.title}</span><strong>{task.title}</strong></div>
+          <div><span>{meta.icon} {meta.title}{item.isReview ? ' · 记忆复习' : ' · 新内容'}</span><strong>{task.title}</strong></div>
           <span className="step-count">{index + 1}/{task.items.length}</span>
         </header>
         <div className="step-dots">{task.items.map((entry, step) => <i key={entry.id} className={task.doneItemIds.includes(entry.id) ? 'done' : step === index ? 'current' : ''} />)}</div>

@@ -2,12 +2,14 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { createTtsMiddleware } from './tts.mjs';
+import { createContentGeneratorMiddleware } from './content-generator.mjs';
 
 const root = resolve('dist');
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
 const tts = createTtsMiddleware();
+const contentGenerator = createContentGeneratorMiddleware();
 createServer((req, res) => {
-  void tts(req, res, async () => {
+  void contentGenerator(req, res, () => tts(req, res, async () => {
     try {
       const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
       if (path === '/healthz') { res.end('ok\n'); return; }
@@ -30,5 +32,5 @@ createServer((req, res) => {
       });
       res.end(req.method === 'HEAD' ? undefined : data);
     } catch { res.writeHead(404); res.end('文件不存在'); }
-  });
+  }));
 }).listen(Number(process.env.PORT || 80), process.env.HOST || '0.0.0.0', () => console.log('乐学在线语音服务已启动'));

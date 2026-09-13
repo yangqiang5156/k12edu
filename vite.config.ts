@@ -1,5 +1,6 @@
 import { loadEnv } from 'vite';
 import { createTtsMiddleware } from './server/tts.mjs';
+import { createContentGeneratorMiddleware } from './server/content-generator.mjs';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -9,9 +10,17 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     {
-      name: 'online-tts',
-      configureServer(server) { server.middlewares.use(createTtsMiddleware({ ...loadEnv(mode, process.cwd(), ''), ...process.env })); },
-      configurePreviewServer(server) { server.middlewares.use(createTtsMiddleware({ ...loadEnv(mode, process.cwd(), ''), ...process.env })); },
+      name: 'online-services',
+      configureServer(server) {
+        const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
+        server.middlewares.use(createContentGeneratorMiddleware(env));
+        server.middlewares.use(createTtsMiddleware(env));
+      },
+      configurePreviewServer(server) {
+        const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
+        server.middlewares.use(createContentGeneratorMiddleware(env));
+        server.middlewares.use(createTtsMiddleware(env));
+      },
     },
     VitePWA({
       registerType: 'autoUpdate',

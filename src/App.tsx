@@ -120,7 +120,7 @@ function App() {
     if (data) {
       const pet = { ...data.pet, selected: settings.petId };
       const existingPlan = data.plans.find((plan) => plan.date === today);
-      const plan = regenerateDailyPlanForSettings(today, settings, data.content, data.completions, existingPlan);
+      const plan = regenerateDailyPlanForSettings(today, settings, data.content, data.completions, existingPlan, data.settings);
       await Promise.all([savePet(pet), savePlan(plan)]);
       setData((current) => current && ({
         ...current,

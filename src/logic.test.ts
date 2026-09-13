@@ -6,20 +6,20 @@ import {
   moduleRewards, numberSpeechText, numberToChinese, numberToEnglish, petLevel, rewardBalanceAdjustmentEntries, rewardEntriesForCompletion,
   regenerateDailyPlanForSettings, shouldGrantAttendanceBonus, unlockedClassicCount, validateBackup, validateContentPack, weekStartKey
 } from './logic';
-import type { CompletionEvent, DailyPlan, RewardLedgerEntry } from './types';
+import type { CompletionEvent, DailyPlan, ParentSettings, RewardLedgerEntry } from './types';
 
 const completion = (id: string, module: CompletionEvent['module'] = 'guoxue'): CompletionEvent => ({
   id, date: '2026-08-10', module, taskId: id, completedAt: '2026-08-10T08:00:00.000Z', contentIds: [id]
 });
 
 describe('每日排课', () => {
-  it('英语从每天两个新字母开始，周一不安排科学', () => {
+  it('英语从每天两个新字母开始，所有开启模块都按日安排', () => {
     const plan = generateDailyPlan('2026-08-10', DEFAULT_SETTINGS, BUILTIN_CONTENT, []);
     expect(plan.isActiveDay).toBe(true);
-    expect(plan.modules.map((task) => task.module)).toEqual(['guoxue', 'literacy', 'math', 'english', 'writing']);
+    expect(plan.modules.map((task) => task.module)).toEqual(['guoxue', 'literacy', 'math', 'english', 'writing', 'science']);
     expect(plan.modules.find((task) => task.module === 'english')?.items.map((item) => item.contentId)).toEqual(['letter-a', 'letter-b']);
     expect(plan.modules.find((task) => task.module === 'english')?.title).toContain('0/26');
-    expect(plan.modules.find((task) => task.module === 'literacy')?.items).toHaveLength(4);
+    expect(plan.modules.find((task) => task.module === 'literacy')?.items).toHaveLength(2);
   });
 
   it('认识全部字母后进入单词与每周三本绘本排课', () => {
@@ -32,7 +32,8 @@ describe('每日排课', () => {
     expect(monday.modules.find((task) => task.module === 'english')?.items.some((item) => item.kind === 'reader')).toBe(true);
     const plan = generateDailyPlan('2026-08-11', DEFAULT_SETTINGS, BUILTIN_CONTENT, learnedLetters);
     expect(plan.modules.some((task) => task.module === 'science')).toBe(true);
-    expect(plan.modules.find((task) => task.module === 'english')?.items.every((item) => item.kind === 'word')).toBe(true);
+    expect(plan.modules.find((task) => task.module === 'english')?.items.filter((item) => !item.isReview).every((item) => item.kind === 'word')).toBe(true);
+    expect(plan.modules.find((task) => task.module === 'english')?.items.some((item) => item.isReview && item.kind === 'letter')).toBe(true);
   });
 
   it('非学习日生成稳定的休息日清单', () => {
@@ -52,7 +53,7 @@ describe('每日排课', () => {
     const saturdaySettings = { ...DEFAULT_SETTINGS, activeWeekdays: [...DEFAULT_SETTINGS.activeWeekdays, 6] };
     const updatedPlan = regenerateDailyPlanForSettings(date, saturdaySettings, BUILTIN_CONTENT, [], restPlan);
     expect(updatedPlan.isActiveDay).toBe(true);
-    expect(updatedPlan.modules.map((task) => task.module)).toEqual(['guoxue', 'literacy', 'math', 'english', 'writing']);
+    expect(updatedPlan.modules.map((task) => task.module)).toEqual(['guoxue', 'literacy', 'math', 'english', 'writing', 'science']);
   });
 
   it('重新生成设置相关清单时保留当天已有进度', () => {
@@ -68,6 +69,32 @@ describe('每日排课', () => {
       existingPlan
     );
     expect(updatedPlan.modules[0].doneItemIds).toEqual(existingPlan.modules[0].doneItemIds);
+  });
+
+  it('按模块配置每日新内容数并立即更新未开始的当天任务', () => {
+    const date = '2026-08-10';
+    const existingPlan = generateDailyPlan(date, DEFAULT_SETTINGS, BUILTIN_CONTENT, []);
+    const settings = { ...DEFAULT_SETTINGS, dailyContentCounts: { ...DEFAULT_SETTINGS.dailyContentCounts, literacy: 3, science: 2 } };
+    const updatedPlan = regenerateDailyPlanForSettings(date, settings, BUILTIN_CONTENT, [], existingPlan, DEFAULT_SETTINGS);
+    expect(updatedPlan.modules.find((task) => task.module === 'literacy')?.items).toHaveLength(3);
+    expect(updatedPlan.modules.find((task) => task.module === 'science')?.items).toHaveLength(2);
+  });
+
+  it('按第1、3、7、14、30天加入已学内容并标记为记忆复习', () => {
+    const settings: ParentSettings = { ...DEFAULT_SETTINGS, enabledModules: ['literacy'], dailyContentCounts: { literacy: 2 } };
+    const learned: CompletionEvent = {
+      id: 'learn-chars', date: '2026-08-10', module: 'literacy', taskId: 'learn-chars',
+      completedAt: '2026-08-10T08:00:00.000Z', contentIds: ['char-1', 'char-2']
+    };
+    const dayOne = generateDailyPlan('2026-08-11', settings, BUILTIN_CONTENT, [learned]);
+    expect(dayOne.modules[0].items.filter((item) => item.isReview).map((item) => item.contentId)).toEqual(['char-1', 'char-2']);
+    expect(dayOne.modules[0].items.filter((item) => !item.isReview)).toHaveLength(2);
+
+    const reviewedDayOne: CompletionEvent = { ...learned, id: 'review-day-1', date: '2026-08-11', contentIds: ['char-1', 'char-2'] };
+    const dayTwo = generateDailyPlan('2026-08-12', settings, BUILTIN_CONTENT, [learned, reviewedDayOne]);
+    expect(dayTwo.modules[0].items.some((item) => item.isReview)).toBe(false);
+    const dayThree = generateDailyPlan('2026-08-13', settings, BUILTIN_CONTENT, [learned, reviewedDayOne]);
+    expect(dayThree.modules[0].items.filter((item) => item.isReview)).toHaveLength(2);
   });
 
   it('每掌握10首不同古诗解锁一篇古文', () => {
