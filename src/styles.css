@@ -278,3 +278,24 @@ button:disabled { cursor: default; opacity: .45; }
   .content-create-actions button { flex: 1; }
   .ai-content-creator > div { grid-template-columns: 1fr; }
 }
+
+/* 学习入口、表现反馈与家长周报 */
+.continue-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px; margin-bottom: 18px; border-radius: 24px; background: #f0ebff; color: #39304f; }
+.continue-card h2 { margin: 6px 0; }
+.continue-card p { margin: 0; line-height: 1.5; }
+.continue-card .primary-button { flex-shrink: 0; min-height: 48px; }
+.learning-assessment { display: grid; gap: 12px; width: 100%; max-width: 520px; margin: 16px auto; text-align: center; }
+.learning-assessment small, .attempt-note { color: #665d76; }
+.assessment-options { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.assessment-options button { min-height: 48px; padding: 12px 16px; border: 1px solid #c8bbeb; background: #f5f1ff; color: #493572; border-radius: 14px; font: inherit; cursor: pointer; }
+.week-navigation { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
+.week-navigation button { min-height: 44px; border: 0; border-radius: 12px; padding: 8px 14px; background: #f0ebff; color: #493572; cursor: pointer; }
+.weekly-report .metrics-grid { margin: 14px 0; }
+.weekly-report .metrics-grid strong { font-size: 22px; }
+.weekly-report li { margin: 10px 0; }
+.weekly-report li span { display: block; margin-top: 4px; font-size: 13px; color: #665d76; }
+.weekly-suggestion { background: #f0f6ee; padding: 14px; border-radius: 12px; line-height: 1.7; }
+.weekly-report small { display: block; color: #665d76; line-height: 1.7; }
+.form-card select { width: 100%; padding: 12px; border: 1px solid #ded7e8; border-radius: 12px; background: #fff; color: #39304f; font: inherit; }
+button:disabled { cursor: default; }
+@media (max-width: 480px) { .continue-card { flex-direction: column; align-items: stretch; } .continue-card .primary-button { width: 100%; } }

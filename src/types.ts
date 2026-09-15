@@ -39,6 +39,9 @@ export interface ContentPackV1 {
 
 export interface ParentSettings {
   childName: string;
+  childAge?: number;
+  mathStartStage?: number;
+  englishStart?: 'letters' | 'words';
   activeWeekdays: number[];
   enabledModules: ModuleId[];
   dailyContentCounts?: Partial<Record<ModuleId, number>>;
@@ -89,6 +92,28 @@ export interface CompletionEvent {
   completedAt: string;
   contentIds: string[];
 }
+
+export type LearningOutcome = 'independent' | 'assisted' | 'practice' | 'unknown';
+
+export interface LearningEvent {
+  id: string;
+  date: string;
+  module: ModuleId;
+  taskId: string;
+  contentId: string;
+  title: string;
+  kind: ContentKind;
+  isReview: boolean;
+  outcome: LearningOutcome;
+  attempts: number;
+  wrongAttempts: number;
+  firstAnswerCorrect?: boolean;
+  completedAt?: string;
+  updatedAt: string;
+  legacy?: boolean;
+}
+
+export type LearningAction = { type: 'answer'; answer: string } | { type: 'complete'; outcome: Exclude<LearningOutcome, 'unknown'> };
 
 export type Currency = 'stars' | 'foodHalfUnits' | 'xp' | 'gems' | 'badges';
 
@@ -158,6 +183,7 @@ export interface BackupEnvelopeV1 {
   app: 'lexue-workbench';
   exportedAt: string;
   data: {
+    learningEvents?: LearningEvent[];
     settings: ParentSettings;
     content: ContentItem[];
     plans: DailyPlan[];

@@ -1,14 +1,17 @@
 import { useMemo, useState } from 'react';
 import { buildLearningHistory, learnedContentIds, type LearningHistoryStatus } from '../learning-history';
-import { MODULE_META, type CompletionEvent, type DailyPlan, type ModuleId } from '../types';
+import { MODULE_META, type LearningEvent, type CompletionEvent, type DailyPlan, type ModuleId } from '../types';
+
+import { OUTCOME_LABELS } from '../learning';
 
 interface Props {
+  events?: LearningEvent[];
   plans: DailyPlan[];
   completions: CompletionEvent[];
   totalContent: number;
 }
 
-export function LearningHistory({ plans, completions, totalContent }: Props) {
+export function LearningHistory({ plans, completions, totalContent, events = [] }: Props) {
   const [date, setDate] = useState('');
   const [module, setModule] = useState<ModuleId | 'all'>('all');
   const [status, setStatus] = useState<LearningHistoryStatus>('all');
@@ -42,7 +45,7 @@ export function LearningHistory({ plans, completions, totalContent }: Props) {
           <header><div><time>{new Date(`${day.date}T12:00:00`).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</time><span>{day.modules.length} 个模块 · {itemCount} 个内容</span></div><b>{doneCount}/{itemCount}</b></header>
           {day.modules.map((task, taskIndex) => <details key={task.id} open={dayIndex === 0 && taskIndex === 0}>
             <summary><span>{MODULE_META[task.module].icon} {MODULE_META[task.module].title}</span><small>{task.title}</small><b>{task.items.filter((item) => item.completed).length}/{task.items.length}</b></summary>
-            <div className="history-items">{task.items.map((item) => <div key={item.id} className={item.completed ? 'completed' : 'incomplete'}><i>{item.completed ? '✓' : '○'}</i><span><strong>{item.title}</strong><small>{item.contentId}{item.isReview ? ' · 记忆复习' : ' · 新内容'}</small></span><b>{item.completed ? '已完成' : '未完成'}</b></div>)}</div>
+            <div className="history-items">{task.items.map((item) => <div key={item.id} className={item.completed ? 'completed' : 'incomplete'}><i>{item.completed ? '✓' : '○'}</i><span><strong>{item.title}</strong><small>{item.contentId}{item.isReview ? ' · 记忆复习' : ' · 新内容'}</small></span><b>{events.find(event => event.id === item.id) ? OUTCOME_LABELS[events.find(event => event.id === item.id)!.outcome] : item.completed ? '已完成 · 未记录表现' : '未完成'}</b></div>)}</div>
           </details>)}
         </article>;
       })}

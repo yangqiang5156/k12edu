@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { speak, stopSpeech, speechError } from '../audio';
-import { MODULE_META, type DailyModuleTask } from '../types';
+import { MODULE_META, type LearningAction, type LearningEvent, type LearningOutcome, type DailyModuleTask } from '../types';
 import { TraceCanvas } from './TraceCanvas';
 import { NumberLab } from './NumberLab';
 import { lessonSpeechRequest } from '../lesson-speech';
@@ -8,12 +8,16 @@ import { lessonSpeechRequest } from '../lesson-speech';
 interface Props {
   task: DailyModuleTask;
   soundEnabled: boolean;
-  onProgress: (itemId: string) => void;
+  events: LearningEvent[];
+  onProgress: (itemId: string, action: LearningAction) => Promise<void>;
   onClose: () => void;
 }
 
-export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
+export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: Props) {
   const readJob = useRef(0);
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const [traceReady, setTraceReady] = useState(false);
   const [index, setIndex] = useState(() => {
     const first = task.items.findIndex((item) => !task.doneItemIds.includes(item.id));
     return first < 0 ? 0 : first;
@@ -25,7 +29,7 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
   const item = task.items[index];
   const isDone = task.doneItemIds.includes(item.id);
   const meta = MODULE_META[task.module];
-  const hasLessonAudio = task.module !== 'math';
+  const hasLessonAudio = true;
   const [letterUpper = '', letterLower = ''] = item.kind === 'letter' ? item.title.split(/\s+/) : [];
   const letterExample = item.kind === 'letter' ? item.detail?.split('\n').at(-1) : undefined;
   const lessonDetail = item.kind === 'classic'
@@ -34,7 +38,7 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
   const poemParts = item.kind === 'poem' ? lessonDetail?.split('\n').filter(Boolean) ?? [] : [];
   const poemAuthor = poemParts[0];
   const poemPhrases = poemParts.slice(1).join('\n').match(/[^，。！？；\n]+[，。！？；]?/g)?.map((phrase) => phrase.trim()).filter(Boolean) ?? [];
-  const audioButtonLabel = item.kind === 'character'
+  const audioButtonLabel = item.kind === 'math-choice' ? '听题目' : item.kind === 'character'
     ? '听汉字朗读'
     : item.kind === 'letter'
       ? '听字母和例词'
@@ -49,27 +53,26 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
     stopSpeech();
     setAudioStatus('');
     setAudioPlaying(false);
+    setFeedback('');
+    setTraceReady(false);
   }, [item.id]);
 
   useEffect(() => () => { readJob.current += 1; stopSpeech(); }, []);
 
-  const finish = () => {
-    if (!isDone) onProgress(item.id);
-    setFeedback('完成啦，真棒！');
-    window.setTimeout(() => {
-      setFeedback('');
-      if (index < task.items.length - 1) setIndex(index + 1);
-    }, 500);
+  const submit = async (action: LearningAction) => {
+    if (savingRef.current || isDone) return;
+    savingRef.current = true;
+    setSaving(true);
+    setFeedback('');
+    try {
+      await onProgress(item.id, action);
+      setFeedback(action.type === 'answer' && action.answer !== item.answer ? '再想一想，或请家长给一点提示。' : '已经记下来啦！');
+    } catch (error) {
+      setFeedback(error instanceof Error ? `未保存：${error.message}，请再试一次。` : '保存失败，请再试一次。');
+    } finally { savingRef.current = false; setSaving(false); }
   };
-
-  const choose = (option: string) => {
-    if (option === item.answer) {
-      setFeedback('答对啦！⭐');
-      finish();
-    } else {
-      setFeedback('再想一想，你可以的～');
-    }
-  };
+  const finish = (outcome: Exclude<LearningOutcome, 'unknown'>) => void submit({ type: 'complete', outcome });
+  const choose = (option: string) => void submit({ type: 'answer', answer: option });
 
   const readItem = async () => {
     if (!soundEnabled) {
@@ -94,7 +97,7 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
     <div className="modal-backdrop" role="presentation">
       <section className="task-modal" role="dialog" aria-modal="true" aria-label={task.title}>
         <header className="modal-header">
-          <button className="icon-button" onClick={onClose} aria-label="关闭">×</button>
+          <button className="icon-button" disabled={saving} onClick={onClose} aria-label="关闭">×</button>
           <div><span>{meta.icon} {meta.title}{item.isReview ? ' · 记忆复习' : ' · 新内容'}</span><strong>{task.title}</strong></div>
           <span className="step-count">{index + 1}/{task.items.length}</span>
         </header>
@@ -102,7 +105,7 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
 
         {showLab ? <NumberLab soundEnabled={soundEnabled} /> : (
           <main className={`task-content task-${item.kind}`}>
-            {item.kind === 'trace' ? <TraceCanvas glyph={item.title} onDone={finish} /> : <>
+            {item.kind === 'trace' ? <TraceCanvas glyph={item.title} onDone={() => setTraceReady(true)} /> : <>
               <div className={`lesson-visual ${audioPlaying ? 'is-speaking' : ''}`}>
                 <span>{item.kind === 'character' || item.kind === 'word' || item.kind === 'letter' ? item.title : meta.icon}</span>
               </div>
@@ -124,16 +127,20 @@ export function TaskModal({ task, soundEnabled, onProgress, onClose }: Props) {
                 </button>
                 <div className="lesson-audio-status" role="status">{audioStatus}</div>
               </>}
-              {item.options?.length ? <div className="answer-grid">{item.options.map((option) => <button key={option} onClick={() => choose(option)}>{option}</button>)}</div> : <button className="primary-button finish-button" onClick={finish}>{isDone ? '已经完成 ✓' : item.kind === 'reader' ? '朗读完成' : '我学会啦'}</button>}
+              {item.options?.length ? <div className="answer-grid">{item.options.map((option) => <button key={option} disabled={saving || isDone} onClick={() => choose(option)}>{option}</button>)}</div> : null}
             </>}
+            {isDone ? <div className="learning-assessment"><strong>已经完成 ✓</strong><button className="primary-button" onClick={() => index < task.items.length - 1 ? setIndex(index + 1) : onClose()}>{index < task.items.length - 1 ? '继续下一个 →' : '返回今日学习'}</button></div>
+              : !item.options?.length && (item.kind !== 'trace' || traceReady) && <div className="learning-assessment"><strong>这次学得怎么样？</strong><small>家长可以协助记录</small><div className="assessment-options"><button disabled={saving} onClick={() => finish('independent')}>独立完成</button><button disabled={saving} onClick={() => finish('assisted')}>需要提示</button><button disabled={saving} onClick={() => finish('practice')}>还需练习</button></div></div>}
+            {events.find(event => event.id === item.id)?.wrongAttempts ? <p className="attempt-note">已经尝试 {events.find(event => event.id === item.id)?.attempts} 次，慢慢来。</p> : null}
+            {saving && <p role="status">正在保存…</p>}
           </main>
         )}
 
-        {task.module === 'math' && <button className="lab-toggle" onClick={() => setShowLab(!showLab)}>{showLab ? '← 回到今日任务' : '🔢 打开数字探索 0–1000'}</button>}
+        {task.module === 'math' && <button className="lab-toggle" disabled={saving} onClick={() => setShowLab(!showLab)}>{showLab ? '← 回到今日任务' : '🔢 打开数字探索 0–1000'}</button>}
         {feedback && <div className="toast-feedback" role="status">{feedback}</div>}
         <footer className="modal-footer">
-          <button disabled={index === 0} onClick={() => setIndex(index - 1)}>← 上一个</button>
-          <button disabled={index === task.items.length - 1} onClick={() => setIndex(index + 1)}>下一个 →</button>
+          <button disabled={saving || index === 0} onClick={() => setIndex(index - 1)}>← 上一个</button>
+          <button disabled={saving || index === task.items.length - 1} onClick={() => setIndex(index + 1)}>下一个 →</button>
         </footer>
       </section>
     </div>

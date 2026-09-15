@@ -1,10 +1,8 @@
 import { dailyContentCount } from './types';
 import type {
-  AppData,
-  BackupEnvelopeV1,
+  LearningEvent,
   CompletionEvent,
   ContentItem,
-  ContentPackV1,
   DailyItem,
   DailyModuleTask,
   DailyPlan,
@@ -15,7 +13,7 @@ import type {
 } from './types';
 
 export const REVIEW_INTERVALS = [1, 3, 7, 14, 30];
-export const DAILY_PLAN_CURRICULUM_VERSION = 3;
+export const DAILY_PLAN_CURRICULUM_VERSION = 4;
 
 export function localDateKey(date = new Date()): string {
   const year = date.getFullYear();
@@ -121,17 +119,26 @@ export function generateDailyPlan(
   date: string,
   settings: ParentSettings,
   content: ContentItem[],
-  completions: CompletionEvent[]
+  completions: CompletionEvent[],
+  learningEvents: LearningEvent[] = []
 ): DailyPlan {
   const dateObject = new Date(`${date}T12:00:00`);
   const weekday = dateObject.getDay();
   const seed = daySeed(date);
   const isActiveDay = settings.activeWeekdays.includes(weekday);
   const enabled = new Set(settings.enabledModules);
-  const history = learningHistoryBefore(date, completions);
+  const itemCompletions: CompletionEvent[] = learningEvents.filter(event => event.completedAt).map(event => ({
+    id: event.id, date: event.date, module: event.module, taskId: event.taskId,
+    completedAt: event.completedAt!, contentIds: [event.contentId]
+  }));
+  const history = learningHistoryBefore(date, [...completions, ...itemCompletions]);
+  const pastEvents = learningEvents.filter(event => event.date < date).slice().sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+  const latestEvents = new Map<string, LearningEvent>();
+  for (const event of pastEvents) latestEvents.set(event.contentId, event);
   const learnedIds = new Set(history.keys());
   const byModule = (module: ModuleId, kind?: ContentItem['kind']) => content.filter(
     (item) => item.module === module && (!kind || item.kind === kind)
+      && (settings.childAge === undefined || ((item.ageMin ?? 3) <= settings.childAge && (item.ageMax ?? 12) >= settings.childAge))
   );
   const modules: DailyModuleTask[] = [];
 
@@ -144,12 +151,16 @@ export function generateDailyPlan(
 
     if (module === 'guoxue') {
       const poems = byModule('guoxue', 'poem');
-      const classics = byModule('guoxue', 'classic').slice(0, unlockedClassicCount(masteredPoemCount(completions.filter((event) => event.date < date))));
+      const classics = byModule('guoxue', 'classic').slice(0, unlockedClassicCount(masteredPoemCount([...completions, ...itemCompletions].filter((event) => event.date < date))));
       newPool = [...poems, ...classics];
       prefix = '国学积累';
     } else if (module === 'math') {
-      const completedMath = completions.filter((event) => event.module === 'math' && event.date < date).length;
-      const stage = Math.min(6, Math.floor(completedMath / 10) + 1);
+      let stage = settings.mathStartStage ?? 1;
+      while (stage < 6) {
+        const passed = allModuleItems.filter(item => item.stage === stage && latestEvents.get(item.id)?.outcome === 'independent').length;
+        if (passed < 10 || !allModuleItems.some(item => item.stage === stage + 1)) break;
+        stage += 1;
+      }
       newPool = byModule('math', 'math-choice').filter((item) => item.stage === stage);
       prefix = `第${stage}阶`;
     } else if (module === 'english') {
@@ -160,19 +171,32 @@ export function generateDailyPlan(
       const preferredReader = [1, 3, 5].includes(weekday)
         ? pickCircular(readers.filter((item) => !learnedIds.has(item.id)), Math.abs(seed), 1)
         : [];
-      newPool = learnedLetterCount < letters.length ? letters : [...preferredReader, ...words, ...readers.filter((item) => !preferredReader.includes(item))];
-      prefix = learnedLetterCount < letters.length ? `字母启蒙 ${learnedLetterCount}/${letters.length}` : '英语积累';
+      newPool = settings.englishStart !== 'words' && learnedLetterCount < letters.length ? letters : [...preferredReader, ...words, ...readers.filter((item) => !preferredReader.includes(item))];
+      prefix = settings.englishStart !== 'words' && learnedLetterCount < letters.length ? `字母启蒙 ${learnedLetterCount}/${letters.length}` : '英语积累';
     } else if (module === 'literacy') prefix = '识字积累';
     else if (module === 'writing') prefix = '慢慢描一描';
     else if (module === 'science') prefix = '小小科学家';
 
-    const unseen = newPool.filter((item) => !learnedIds.has(item.id));
+    const unseen = newPool.filter((item) => !learnedIds.has(item.id) && !latestEvents.has(item.id));
     const newItems = module === 'english'
       ? unseen.slice(0, count)
       : pickCircular(unseen, Math.abs(seed * 7 + settings.enabledModules.indexOf(module) * 11), count);
     const selectedIds = new Set(newItems.map((item) => item.id));
-    let reviews = dueReviewItems(date, allModuleItems, history).filter((item) => !selectedIds.has(item.id)).slice(0, count);
-    if (!newItems.length && !reviews.length) {
+    const legacyDue = new Set(dueReviewItems(date, allModuleItems, history).map(item => item.id));
+    const due = allModuleItems.filter(item => {
+      const latest = latestEvents.get(item.id);
+      if (!latest || latest.outcome === 'unknown') return legacyDue.has(item.id);
+      const successful = pastEvents.filter(event => event.contentId === item.id && event.outcome === 'independent' && event.completedAt);
+      const lastDifficulty = pastEvents.filter(event => event.contentId === item.id && ['assisted', 'practice'].includes(event.outcome)).at(-1);
+      const streak = successful.filter(event => !lastDifficulty || event.updatedAt > lastDifficulty.updatedAt).length;
+      const interval = latest.outcome === 'practice' ? 1 : latest.outcome === 'assisted' ? 3 : REVIEW_INTERVALS[Math.min(Math.max(0, streak - 1), REVIEW_INTERVALS.length - 1)];
+      return datePlusDays(latest.date, interval) <= date;
+    }).sort((a, b) => {
+      const priority = (id: string) => latestEvents.get(id)?.outcome === 'practice' ? 0 : latestEvents.get(id)?.outcome === 'assisted' ? 1 : 2;
+      return priority(a.id) - priority(b.id) || a.id.localeCompare(b.id);
+    });
+    let reviews = due.filter((item) => !selectedIds.has(item.id)).slice(0, count);
+    if (!newItems.length && !reviews.length && !pastEvents.length) {
       reviews = pickCircular(allModuleItems.filter((item) => learnedIds.has(item.id)), Math.abs(seed), count);
     }
     if (newItems.length || reviews.length) modules.push(moduleTask(date, module, newItems, reviews, prefix));
@@ -187,14 +211,18 @@ export function regenerateDailyPlanForSettings(
   content: ContentItem[],
   completions: CompletionEvent[],
   existingPlan?: DailyPlan,
-  previousSettings?: ParentSettings
+  previousSettings?: ParentSettings,
+  learningEvents: LearningEvent[] = []
 ): DailyPlan {
-  const freshPlan = generateDailyPlan(date, settings, content, completions);
+  const freshPlan = generateDailyPlan(date, settings, content, completions, learningEvents);
   if (!existingPlan) return freshPlan;
 
   const previousModules = new Map(existingPlan.modules.map((module) => [module.module, module]));
   const schedulingChanged = previousSettings ? (
-    previousSettings.activeWeekdays.join(',') !== settings.activeWeekdays.join(',')
+    previousSettings.childAge !== settings.childAge
+    || previousSettings.mathStartStage !== settings.mathStartStage
+    || previousSettings.englishStart !== settings.englishStart
+    || previousSettings.activeWeekdays.join(',') !== settings.activeWeekdays.join(',')
     || previousSettings.enabledModules.join(',') !== settings.enabledModules.join(',')
     || settings.enabledModules.some((module) => dailyContentCount(previousSettings, module) !== dailyContentCount(settings, module))
   ) : false;
@@ -295,41 +323,7 @@ export function milestoneBadgeEntry(completionCount: number, date: string): Rewa
   };
 }
 
-export function validateContentPack(value: unknown): { ok: true; pack: ContentPackV1 } | { ok: false; errors: string[] } {
-  const errors: string[] = [];
-  if (!value || typeof value !== 'object') return { ok: false, errors: ['内容包必须是 JSON 对象'] };
-  const candidate = value as Partial<ContentPackV1>;
-  if (candidate.schemaVersion !== 1) errors.push('schemaVersion 必须为 1');
-  if (!candidate.id || typeof candidate.id !== 'string') errors.push('缺少内容包 id');
-  if (!candidate.title || typeof candidate.title !== 'string') errors.push('缺少内容包标题');
-  if (!candidate.contentVersion || typeof candidate.contentVersion !== 'string') errors.push('缺少 contentVersion');
-  if (!Array.isArray(candidate.items) || !candidate.items.length) errors.push('items 必须是非空数组');
-  const ids = new Set<string>();
-  candidate.items?.forEach((item, index) => {
-    if (!item.id || !item.module || !item.kind || !item.title) errors.push(`第 ${index + 1} 条缺少 id、module、kind 或 title`);
-    if (!['guoxue', 'literacy', 'math', 'english', 'writing', 'science'].includes(item.module)) errors.push(`第 ${index + 1} 条 module 无效`);
-    if (!['poem', 'classic', 'character', 'math-choice', 'letter', 'word', 'reader', 'trace', 'science'].includes(item.kind)) errors.push(`第 ${index + 1} 条 kind 无效`);
-    if (item.ageMin !== undefined && (!Number.isInteger(item.ageMin) || item.ageMin < 3 || item.ageMin > 12)) errors.push(`第 ${index + 1} 条 ageMin 应为3到12的整数`);
-    if (item.ageMax !== undefined && (!Number.isInteger(item.ageMax) || item.ageMax < 3 || item.ageMax > 12)) errors.push(`第 ${index + 1} 条 ageMax 应为3到12的整数`);
-    if (item.ageMin !== undefined && item.ageMax !== undefined && item.ageMin > item.ageMax) errors.push(`第 ${index + 1} 条适合年龄范围无效`);
-    if (ids.has(item.id)) errors.push(`内容 id 重复：${item.id}`);
-    ids.add(item.id);
-  });
-  return errors.length ? { ok: false, errors } : { ok: true, pack: candidate as ContentPackV1 };
-}
-
-export function validateBackup(value: unknown): { ok: true; backup: BackupEnvelopeV1 } | { ok: false; error: string } {
-  if (!value || typeof value !== 'object') return { ok: false, error: '备份文件格式无效' };
-  const candidate = value as Partial<BackupEnvelopeV1>;
-  if (candidate.schemaVersion !== 1 || candidate.app !== 'lexue-workbench' || !candidate.data) {
-    return { ok: false, error: '不是可识别的乐学 V1 备份' };
-  }
-  const data = candidate.data as Partial<AppData>;
-  if (!data.settings || !Array.isArray(data.content) || !Array.isArray(data.plans) || !Array.isArray(data.ledger)) {
-    return { ok: false, error: '备份数据不完整' };
-  }
-  return { ok: true, backup: candidate as BackupEnvelopeV1 };
-}
+export { validateContentPack, validateBackup } from './validation';
 
 export function numberToChinese(n: number): string {
   if (n === 0) return '零';

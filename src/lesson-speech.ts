@@ -11,12 +11,12 @@ function englishExample(detail?: string): string | undefined {
 }
 
 export function lessonSpeechRequest(item: DailyItem, lessonDetail?: string): LessonSpeechRequest {
+  if (item.kind === 'math-choice') return { text: item.prompt ?? item.title, language: 'zh' };
   if (item.kind === 'letter') {
-    const upper = item.title.trim().split(/\s+/)[0]?.toUpperCase();
+    const [upper = '', lower = upper.toLowerCase()] = item.title.trim().split(/\s+/);
     const example = englishExample(item.detail);
-    const exampleSentence = example ? ` ${upper} is for ${example}.` : '';
     return {
-      text: `The letter ${upper}. ${upper}. ${upper}.${exampleSentence}`,
+      text: [upper, lower, example].filter(Boolean).join('. ') + '.',
       language: 'en'
     };
   }

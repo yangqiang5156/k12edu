@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { CONTENT_AGE_OPTIONS, CONTENT_KINDS_BY_MODULE, createContentDraft, filterContentLibrary, formatContentAge, normalizeContentItem } from '../content-library';
 import { generateContentFromPrompt } from '../content-generation';
+import { contentErrors } from '../validation';
 import { MODULE_META, type ContentItem, type ModuleId } from '../types';
 
 interface Props {
@@ -92,8 +93,10 @@ export function ContentLibraryManager({ content, learnedContentIds, onSave, onDe
       options: optionsText.split('\n'),
       tags: tagsText.split(/[、,，]/)
     });
-    await onSave(item);
-    setDraft(undefined);
+    const errors = contentErrors(item);
+    if (errors.length) return setError(errors.join('；'));
+    try { await onSave(item); setDraft(undefined); }
+    catch (error) { setError(error instanceof Error ? error.message : '资料保存失败，请重试'); }
   };
 
   return <main className="parent-body content-manager">

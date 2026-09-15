@@ -3,6 +3,7 @@ import { dailyContentCount, MODULE_META, type AppData, type ContentItem, type Mo
 import { calculateWallet, completedDaysThisWeek, localDateKey } from '../logic';
 import { formatContentAge } from '../content-library';
 import { ContentLibraryManager } from './ContentLibraryManager';
+import { WeeklyReport } from './WeeklyReport';
 import { LearningHistory } from './LearningHistory';
 import { learnedContentIds as collectLearnedContentIds } from '../learning-history';
 
@@ -64,6 +65,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
       </nav>
 
       {tab === 'overview' && <main className="parent-body">
+        <WeeklyReport events={data.learningEvents ?? []} />
         <section className="metrics-grid">
           <article><span>今日进度</span><strong>{completedCount}/{todayPlan?.modules.length ?? 0}</strong></article>
           <article><span>本周打卡</span><strong>{completedDaysThisWeek(data.plans, today)}/5</strong></article>
@@ -82,6 +84,10 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
       {tab === 'settings' && <main className="parent-body">
         <section className="parent-card form-card"><h2>学习设置</h2>
           <label>孩子昵称<input value={draft.childName} maxLength={8} onChange={(e) => setDraft({ ...draft, childName: e.target.value })} /></label>
+          <label>孩子年龄<select aria-label="孩子年龄" value={draft.childAge ?? 4} onChange={e => setDraft({ ...draft, childAge: Number(e.target.value) })}>{Array.from({ length: 10 }, (_, i) => i + 3).map(age => <option key={age} value={age}>{age}岁</option>)}</select></label>
+          <label>数学学习起点<select aria-label="数学学习起点" value={draft.mathStartStage ?? 1} onChange={e => setDraft({ ...draft, mathStartStage: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6].map(stage => <option key={stage} value={stage}>第{stage}阶</option>)}</select></label>
+          <label>英语学习起点<select aria-label="英语学习起点" value={draft.englishStart ?? 'letters'} onChange={e => setDraft({ ...draft, englishStart: e.target.value as 'letters' | 'words' })}><option value="letters">从字母开始</option><option value="words">已认识字母，从单词和绘本开始</option></select></label>
+          <p className="setting-hint">按年龄筛选内容；数学在当前阶段独立完成10个不同内容后尝试下一阶。修改起点只调整尚未开始的任务，已有学习记录会保留。若年龄与阶段没有匹配内容，该模块暂不安排。</p>
           <span className="field-label">每周学习日</span><div className="toggle-row">{weekdayLabels.map((label, day) => <button key={day} className={draft.activeWeekdays.includes(day) ? 'selected' : ''} onClick={() => setDraft({ ...draft, activeWeekdays: draft.activeWeekdays.includes(day) ? draft.activeWeekdays.filter((value) => value !== day) : [...draft.activeWeekdays, day].sort() })}>周{label}</button>)}</div>
           <span className="field-label">开启的模块与每日内容</span>
           <p className="setting-hint">设置每天新增几个内容；系统会另外按第 1、3、7、14、30 天安排适量复习。</p>
@@ -96,7 +102,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
           <label className="switch-row"><span>🔊 按钮和朗读声音</span><input type="checkbox" checked={draft.soundEnabled} onChange={(e) => setDraft({ ...draft, soundEnabled: e.target.checked })} /></label>
           <label className="switch-row"><span>🌿 减少动态效果</span><input type="checkbox" checked={draft.reduceMotion} onChange={(e) => setDraft({ ...draft, reduceMotion: e.target.checked })} /></label>
           <span className="field-label">学习伙伴</span><div className="pet-picker">{([['stella', '小兔子', '🐰'], ['archie', '阿奇', '🐶'], ['marie', '玛丽猫', '🐱']] as const).map(([id, name, icon]) => <button key={id} className={draft.petId === id ? 'selected' : ''} onClick={() => setDraft({ ...draft, petId: id })}>{icon}<span>{name}</span></button>)}</div>
-          <button className="primary-button" onClick={async () => { await onSaveSettings(draft); }}>保存学习设置</button>
+          <button className="primary-button" onClick={async () => { try { await onSaveSettings({ ...draft, childAge: draft.childAge ?? 4, mathStartStage: draft.mathStartStage ?? 1, englishStart: draft.englishStart ?? 'letters' }); } catch { /* 页面由保存方显示错误，保留草稿便于重试。 */ } }}>保存学习设置</button>
         </section>
         <section className="parent-card"><h2>修改今日任务</h2><p>可以删减小任务，或从对应模块的已有资料库中选择补充；已领取奖励的模块不可再改。</p>
           {todayPlan?.modules.map((task) => {
@@ -107,7 +113,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
               && (!keyword || `${content.title} ${content.subtitle ?? ''} ${content.body ?? ''}`.toLowerCase().includes(keyword)))
               .slice(0, 40);
             return <div className="task-editor" key={task.id}><strong>{MODULE_META[task.module].icon} {MODULE_META[task.module].title}</strong>
-            {task.items.map((item) => <div className="task-edit-row" key={item.id}><span>{item.title}</span><button disabled={Boolean(task.collectedAt) || task.items.length <= 1} onClick={() => onRemoveTaskItem(task.id, item.id)}>删除</button></div>)}
+            {task.items.map((item) => <div className="task-edit-row" key={item.id}><span>{item.title}</span><button disabled={Boolean(task.collectedAt) || task.doneItemIds.includes(item.id) || task.items.length <= 1 || !task.items.some(other => other.id !== item.id && !task.doneItemIds.includes(other.id))} onClick={() => onRemoveTaskItem(task.id, item.id)}>删除</button></div>)}
             <button className="library-picker-trigger" disabled={Boolean(task.collectedAt)} title={task.collectedAt ? '奖励已领取，今日任务不能再修改' : '从已有资料库选择'} onClick={() => {
               setLibraryPickerTaskId(libraryPickerTaskId === task.id ? undefined : task.id);
               setLibrarySearch('');
@@ -128,7 +134,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         </section>
       </main>}
 
-      {tab === 'history' && <LearningHistory plans={data.plans} completions={data.completions} totalContent={data.content.length} />}
+      {tab === 'history' && <LearningHistory events={data.learningEvents ?? []} plans={data.plans} completions={data.completions} totalContent={data.content.length} />}
 
       {tab === 'rewards' && <main className="parent-body">
         {pending.length > 0 && <section className="parent-card pending-card"><h2>待确认兑换</h2>{pending.map((item) => <div className="pending-row" key={item.id}><span>{item.rewardTitle}</span><div><button onClick={() => onResolveRedemption(item, false)}>拒绝</button><button className="approve" onClick={() => onResolveRedemption(item, true)}>同意</button></div></div>)}</section>}

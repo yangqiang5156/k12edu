@@ -1,4 +1,4 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb';
 import { BUILTIN_CONTENT, BUILTIN_CONTENT_VERSION, DEFAULT_REWARDS } from './content';
 import { ensureContentAge } from './content-library';
 import type {
@@ -16,9 +16,13 @@ import type {
   RewardDefinition,
   RewardLedgerEntry
 } from './types';
-import { DEFAULT_DAILY_CONTENT_COUNTS } from './types';
+import { DEFAULT_DAILY_CONTENT_COUNTS, type LearningEvent, type LearningAction } from './types';
+import { applyLearningAction, ensureTodayPlan } from './learning';
+import { calculateWallet, localDateKey, regenerateDailyPlanForSettings } from './logic';
+import { assertContent, validateBackup, validateContentPack, validateSettings } from './validation';
 
 interface LexueDB extends DBSchema {
+  learningEvents: { key: string; value: LearningEvent };
   settings: { key: string; value: ParentSettings };
   content: { key: string; value: ContentItem; indexes: { 'by-module': string } };
   plans: { key: string; value: DailyPlan };
@@ -33,6 +37,9 @@ interface LexueDB extends DBSchema {
 
 export const DEFAULT_SETTINGS: ParentSettings = {
   childName: '乐乐',
+  childAge: 4,
+  mathStartStage: 1,
+  englishStart: 'letters',
   activeWeekdays: [1, 2, 3, 4, 5],
   enabledModules: ['guoxue', 'literacy', 'math', 'english', 'writing', 'science'],
   dailyContentCounts: DEFAULT_DAILY_CONTENT_COUNTS,
@@ -49,8 +56,10 @@ let databasePromise: Promise<IDBPDatabase<LexueDB>> | undefined;
 
 function database(): Promise<IDBPDatabase<LexueDB>> {
   if (!databasePromise) {
-    databasePromise = openDB<LexueDB>(DB_NAME, 1, {
-      upgrade(db) {
+    databasePromise = openDB<LexueDB>(DB_NAME, 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 2) db.createObjectStore('learningEvents', { keyPath: 'id' });
+        if (oldVersion >= 1) return;
         db.createObjectStore('settings');
         const content = db.createObjectStore('content', { keyPath: 'id' });
         content.createIndex('by-module', 'module');
@@ -87,10 +96,19 @@ export async function seedDatabase(): Promise<void> {
     }, 'parent');
   }
   const currentSettings = await db.get('settings', 'parent');
-  if (currentSettings && (!currentSettings.dailyContentCounts || Object.keys(DEFAULT_DAILY_CONTENT_COUNTS).some((module) => currentSettings.dailyContentCounts?.[module as keyof typeof DEFAULT_DAILY_CONTENT_COUNTS] === undefined))) {
+  if (currentSettings && (
+    !currentSettings.dailyContentCounts
+    || Object.keys(DEFAULT_DAILY_CONTENT_COUNTS).some((module) => currentSettings.dailyContentCounts?.[module as keyof typeof DEFAULT_DAILY_CONTENT_COUNTS] === undefined)
+    || currentSettings.childAge === undefined
+    || currentSettings.mathStartStage === undefined
+    || currentSettings.englishStart === undefined
+  )) {
     await db.put('settings', {
       ...currentSettings,
-      dailyContentCounts: { ...DEFAULT_DAILY_CONTENT_COUNTS, ...currentSettings.dailyContentCounts }
+      dailyContentCounts: { ...DEFAULT_DAILY_CONTENT_COUNTS, ...currentSettings.dailyContentCounts },
+      childAge: currentSettings.childAge ?? 4,
+      mathStartStage: currentSettings.mathStartStage ?? 1,
+      englishStart: currentSettings.englishStart ?? 'letters'
     }, 'parent');
   }
   const builtInPack = await db.get('contentPacks', 'builtin-curriculum');
@@ -121,25 +139,83 @@ export async function seedDatabase(): Promise<void> {
   }
 }
 
-export async function loadAppData(): Promise<AppData> {
-  await seedDatabase();
-  const db = await database();
-  const [settings, content, plans, completions, ledger, pet, redemptions, reports, contentPacks, rewardDefinitions] = await Promise.all([
-    db.get('settings', 'parent'), db.getAll('content'), db.getAll('plans'), db.getAll('completions'), db.getAll('ledger'),
-    db.get('pet', 'current'), db.getAll('redemptions'), db.getAll('reports'), db.getAll('contentPacks'), db.getAll('rewardDefinitions')
+const STORES = ['settings', 'content', 'plans', 'completions', 'ledger', 'pet', 'redemptions', 'reports', 'contentPacks', 'rewardDefinitions', 'learningEvents'] as const;
+type DataTransaction = IDBPTransaction<LexueDB, typeof STORES, 'readwrite'>;
+
+async function snapshot(tx: DataTransaction): Promise<AppData> {
+  const [settings, content, plans, completions, ledger, pet, redemptions, reports, contentPacks, rewardDefinitions, learningEvents] = await Promise.all([
+    tx.objectStore('settings').get('parent'), tx.objectStore('content').getAll(), tx.objectStore('plans').getAll(),
+    tx.objectStore('completions').getAll(), tx.objectStore('ledger').getAll(), tx.objectStore('pet').get('current'),
+    tx.objectStore('redemptions').getAll(), tx.objectStore('reports').getAll(), tx.objectStore('contentPacks').getAll(),
+    tx.objectStore('rewardDefinitions').getAll(), tx.objectStore('learningEvents').getAll()
   ]);
-  return {
-    settings: settings ?? DEFAULT_SETTINGS,
-    content,
-    plans,
-    completions,
-    ledger,
-    pet: pet ?? { id: 'current', selected: 'stella', mood: 80, fedCount: 0 },
-    redemptions,
-    reports,
-    contentPacks,
-    rewardDefinitions
-  };
+  return { settings: settings ?? DEFAULT_SETTINGS, content, plans, completions, ledger,
+    pet: pet ?? { id: 'current', selected: 'stella', mood: 80, fedCount: 0 }, redemptions, reports, contentPacks, rewardDefinitions, learningEvents };
+}
+
+async function persistSnapshot(tx: DataTransaction, next: AppData, previous?: AppData) {
+  if (next.settings !== previous?.settings) await tx.objectStore('settings').put(next.settings, 'parent');
+  if (next.pet !== previous?.pet) await tx.objectStore('pet').put(next.pet);
+  for (const store of ['content', 'plans', 'completions', 'ledger', 'redemptions', 'reports', 'contentPacks', 'rewardDefinitions', 'learningEvents'] as const) {
+    if (next[store] === previous?.[store]) continue;
+    const old = new Set<unknown>(previous?.[store] ?? []);
+    for (const value of next[store] ?? []) if (!old.has(value)) await tx.objectStore(store).put(value);
+  }
+}
+
+// 在同一事务中读取最新状态并写入，避免连点和多标签页用旧余额覆盖新数据。
+export async function mutateAppData(update: (data: AppData) => AppData): Promise<AppData> {
+  const tx = (await database()).transaction(STORES, 'readwrite');
+  try {
+    const previous = await snapshot(tx);
+    const next = update(previous);
+    await persistSnapshot(tx, next, previous);
+    await tx.done;
+    return next;
+  } catch (error) {
+    try { tx.abort(); } catch { /* 事务可能已经自动中止。 */ }
+    await tx.done.catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function loadAppData(date = localDateKey()): Promise<AppData> {
+  await seedDatabase();
+  return mutateAppData(data => ensureTodayPlan(data, date));
+}
+
+export async function recordLearning(taskId: string, itemId: string, action: LearningAction): Promise<AppData> {
+  return mutateAppData(data => applyLearningAction(data, taskId, itemId, action));
+}
+
+export async function updateLearningSettings(settings: ParentSettings): Promise<AppData> {
+  if (!validateSettings(settings)) throw new Error('学习设置无效，请检查年龄和学习起点');
+  return mutateAppData(data => {
+    const date = localDateKey();
+    const prepared = ensureTodayPlan(data, date);
+    const plan = regenerateDailyPlanForSettings(date, settings, data.content, data.completions,
+      prepared.plans.find(plan => plan.date === date), data.settings, prepared.learningEvents);
+    return { ...prepared, settings, pet: { ...data.pet, selected: settings.petId },
+      plans: [...prepared.plans.filter(plan => plan.date !== date), plan] };
+  });
+}
+
+export async function resolveReward(id: string, approved: boolean): Promise<AppData> {
+  return mutateAppData(data => {
+    const redemption = data.redemptions.find(entry => entry.id === id);
+    if (!redemption || redemption.status !== 'pending') return data;
+    const definition = data.rewardDefinitions.find(entry => entry.id === redemption.rewardId);
+    let ledger = data.ledger;
+    if (approved) {
+      if (!definition) throw new Error('兑换奖励已不存在');
+      if (calculateWallet(ledger)[definition.currency] < definition.cost) throw new Error('余额不足，尚未扣款');
+      const entry: RewardLedgerEntry = { id: `${id}-cost`, date: localDateKey(), createdAt: new Date().toISOString(),
+        sourceId: id, reason: `兑换：${redemption.rewardTitle}`, currency: definition.currency, delta: -definition.cost };
+      ledger = [...ledger, entry];
+    }
+    return { ...data, ledger, redemptions: data.redemptions.map(entry => entry.id === id
+      ? { ...entry, status: approved ? 'approved' : 'rejected', resolvedAt: new Date().toISOString() } : entry) };
+  });
 }
 
 export async function saveSettings(settings: ParentSettings): Promise<void> {
@@ -181,6 +257,7 @@ export async function saveReport(report: DailyReport): Promise<void> {
 }
 
 export async function saveContentItem(item: ContentItem): Promise<void> {
+  assertContent(item);
   await (await database()).put('content', ensureContentAge(item));
 }
 
@@ -189,18 +266,17 @@ export async function deleteContentItem(id: string): Promise<void> {
 }
 
 export async function importContentPack(pack: ContentPackV1): Promise<ContentPackRecord> {
-  const db = await database();
-  const existingIds = new Set((await db.getAllKeys('content')).map(String));
-  const duplicate = pack.items.find((item) => existingIds.has(item.id));
-  if (duplicate) throw new Error(`内容 id 已存在：${duplicate.id}`);
-  const record: ContentPackRecord = {
-    id: pack.id, title: pack.title, contentVersion: pack.contentVersion,
-    importedAt: new Date().toISOString(), itemCount: pack.items.length
-  };
-  const tx = db.transaction(['content', 'contentPacks'], 'readwrite');
-  for (const item of pack.items) await tx.objectStore('content').put(ensureContentAge({ ...item, source: 'imported' }));
-  await tx.objectStore('contentPacks').put(record);
-  await tx.done;
+  const result = validateContentPack(pack);
+  if (!result.ok) throw new Error(result.errors.join('；'));
+  const record: ContentPackRecord = { id: pack.id, title: pack.title, contentVersion: pack.contentVersion,
+    importedAt: new Date().toISOString(), itemCount: pack.items.length };
+  await mutateAppData(data => {
+    if (data.contentPacks.some(entry => entry.id === pack.id)) throw new Error('内容包 id 已存在');
+    const duplicate = pack.items.find(item => data.content.some(entry => entry.id === item.id));
+    if (duplicate) throw new Error(`内容 id 已存在：${duplicate.id}`);
+    return { ...data, content: [...data.content, ...pack.items.map(item => ensureContentAge({ ...item, source: 'imported' }))],
+      contentPacks: [...data.contentPacks, record] };
+  });
   return record;
 }
 
@@ -209,33 +285,43 @@ export function createBackup(data: AppData): BackupEnvelopeV1 {
 }
 
 export async function restoreBackup(backup: BackupEnvelopeV1): Promise<void> {
-  const db = await database();
-  const tx = db.transaction([
-    'settings', 'content', 'plans', 'completions', 'ledger', 'pet', 'redemptions', 'reports', 'contentPacks', 'rewardDefinitions'
-  ], 'readwrite');
-  await Promise.all([
-    tx.objectStore('settings').clear(), tx.objectStore('content').clear(), tx.objectStore('plans').clear(),
-    tx.objectStore('completions').clear(), tx.objectStore('ledger').clear(), tx.objectStore('pet').clear(),
-    tx.objectStore('redemptions').clear(), tx.objectStore('reports').clear(), tx.objectStore('contentPacks').clear(),
-    tx.objectStore('rewardDefinitions').clear()
-  ]);
-  await tx.objectStore('settings').put(backup.data.settings, 'parent');
-  for (const value of backup.data.content) await tx.objectStore('content').put(ensureContentAge(value));
-  for (const value of backup.data.plans) await tx.objectStore('plans').put(value);
-  for (const value of backup.data.completions) await tx.objectStore('completions').put(value);
-  for (const value of backup.data.ledger) await tx.objectStore('ledger').put(value);
-  await tx.objectStore('pet').put(backup.data.pet);
-  for (const value of backup.data.redemptions) await tx.objectStore('redemptions').put(value);
-  for (const value of backup.data.reports) await tx.objectStore('reports').put(value);
-  for (const value of backup.data.contentPacks) await tx.objectStore('contentPacks').put(value);
-  for (const value of backup.data.rewardDefinitions) await tx.objectStore('rewardDefinitions').put(value);
-  await tx.done;
+  const validation = validateBackup(backup);
+  if (!validation.ok) throw new Error(validation.error);
+  // 先完成所有纯数据校验与迁移，再进入覆盖事务。
+  const restored = validation.backup.data;
+  const next = ensureTodayPlan({ ...restored, settings: {
+    ...restored.settings,
+    dailyContentCounts: { ...DEFAULT_DAILY_CONTENT_COUNTS, ...restored.settings.dailyContentCounts },
+    childAge: restored.settings.childAge ?? 4,
+    mathStartStage: restored.settings.mathStartStage ?? 1,
+    englishStart: restored.settings.englishStart ?? 'letters'
+  } });
+  const tx = (await database()).transaction(STORES, 'readwrite');
+  try {
+    for (const store of STORES) await tx.objectStore(store).clear();
+    await persistSnapshot(tx, next);
+    await tx.done;
+  } catch (error) {
+    try { tx.abort(); } catch { /* 自动中止的事务无需再次处理。 */ }
+    await tx.done.catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function clearUserData(): Promise<void> {
-  const db = await database();
-  for (const store of ['plans', 'completions', 'ledger', 'redemptions', 'reports'] as const) await db.clear(store);
-  await db.put('pet', { id: 'current', selected: 'stella', mood: 80, fedCount: 0 });
+  const tx = (await database()).transaction(STORES, 'readwrite');
+  try {
+    const data = await snapshot(tx);
+    for (const store of ['plans', 'completions', 'ledger', 'redemptions', 'reports', 'learningEvents'] as const) await tx.objectStore(store).clear();
+    const next = ensureTodayPlan({ ...data, plans: [], completions: [], ledger: [], redemptions: [], reports: [], learningEvents: [],
+      pet: { id: 'current', selected: data.settings.petId, mood: 80, fedCount: 0 } });
+    await persistSnapshot(tx, next, data);
+    await tx.done;
+  } catch (error) {
+    try { tx.abort(); } catch { /* 自动中止的事务无需再次处理。 */ }
+    await tx.done.catch(() => undefined);
+    throw error;
+  }
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
