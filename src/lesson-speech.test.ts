@@ -10,7 +10,9 @@ describe('课程朗读文本', () => {
     };
     expect(lessonSpeechRequest(item)).toEqual({
       text: 'B. b. ball.',
-      language: 'en'
+      language: 'en',
+      segments: ['B', 'b', 'ball'],
+      pauseMs: 1000
     });
     expect(lessonSpeechRequest(item).text).not.toMatch(/[\u4e00-\u9fff⚽]/);
     expect(lessonSpeechRequest(item).text).not.toContain('is for');
@@ -18,7 +20,7 @@ describe('课程朗读文本', () => {
 
   it('缺少例词时仍只朗读大小写字母', () => {
     const item: DailyItem = { id: 'letter-z', contentId: 'letter-z', kind: 'letter', title: 'Z z' };
-    expect(lessonSpeechRequest(item)).toEqual({ text: 'Z. z.', language: 'en' });
+    expect(lessonSpeechRequest(item)).toEqual({ text: 'Z. z.', language: 'en', segments: ['Z', 'z'], pauseMs: 1000 });
   });
 
   it('其他课程保持原有自动语言朗读', () => {
@@ -35,6 +37,19 @@ describe('课程朗读文本', () => {
       text: '静夜思。唐·李白\n床前明月光，疑是地上霜。',
       language: 'auto'
     });
+  });
+
+  it('科学朗读包含问题、方法、结果和解释', () => {
+    const item: DailyItem = {
+      id: 'science', contentId: 'science-1', kind: 'science', title: '会浮起来吗？',
+      detail: '准备一片树叶和一块小石头，猜一猜谁会浮在水面。'
+    };
+    const request = lessonSpeechRequest(item, item.detail);
+    expect(request.language).toBe('zh');
+    expect(request.text).toContain('科学问题');
+    expect(request.text).toContain('观察方法');
+    expect(request.text).toContain('观察结果');
+    expect(request.text).toContain('科学解释');
   });
 });
 

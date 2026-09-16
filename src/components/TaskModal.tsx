@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { speak, stopSpeech, speechError } from '../audio';
+import { speak, speakSequence, stopSpeech, speechError } from '../audio';
 import { MODULE_META, type LearningAction, type LearningEvent, type LearningOutcome, type DailyModuleTask } from '../types';
 import { TraceCanvas } from './TraceCanvas';
 import { NumberLab } from './NumberLab';
 import { lessonSpeechRequest } from '../lesson-speech';
+import { scienceLesson } from '../science-lesson';
 
 interface Props {
   task: DailyModuleTask;
@@ -38,6 +39,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
   const poemParts = item.kind === 'poem' ? lessonDetail?.split('\n').filter(Boolean) ?? [] : [];
   const poemAuthor = poemParts[0];
   const poemPhrases = poemParts.slice(1).join('\n').match(/[^，。！？；\n]+[，。！？；]?/g)?.map((phrase) => phrase.trim()).filter(Boolean) ?? [];
+  const science = item.kind === 'science' ? scienceLesson(item.title, lessonDetail) : undefined;
   const audioButtonLabel = item.kind === 'math-choice' ? '听题目' : item.kind === 'character'
     ? '听汉字朗读'
     : item.kind === 'letter'
@@ -46,7 +48,9 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
         ? '听英语朗读'
         : item.kind === 'poem' || item.kind === 'classic'
           ? '听国学朗读'
-          : '听内容朗读';
+          : item.kind === 'science'
+            ? '听完整科学讲解'
+            : '听内容朗读';
 
   useEffect(() => {
     readJob.current += 1;
@@ -84,7 +88,11 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     setAudioPlaying(true);
     setAudioStatus('正在准备在线朗读…');
     try {
-      await speak(speechRequest.text, true, speechRequest.language);
+      if (speechRequest.segments?.length) {
+        await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs);
+      } else {
+        await speak(speechRequest.text, true, speechRequest.language);
+      }
       if (job === readJob.current) setAudioStatus('朗读完成，再点一次可以重听');
     } catch (error) {
       if (job === readJob.current) setAudioStatus(speechError(error));
@@ -105,7 +113,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
 
         {showLab ? <NumberLab soundEnabled={soundEnabled} /> : (
           <main className={`task-content task-${item.kind}`}>
-            {item.kind === 'trace' ? <TraceCanvas glyph={item.title} onDone={() => setTraceReady(true)} /> : <>
+            {item.kind === 'trace' ? <TraceCanvas glyph={item.title} soundEnabled={soundEnabled} onDone={() => setTraceReady(true)} /> : <>
               <div className={`lesson-visual ${audioPlaying ? 'is-speaking' : ''}`}>
                 <span>{item.kind === 'character' || item.kind === 'word' || item.kind === 'letter' ? item.title : meta.icon}</span>
               </div>
@@ -113,6 +121,11 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
                 <div><span>大写字母</span><strong>{letterUpper}</strong></div>
                 <div><span>小写字母</span><strong>{letterLower}</strong></div>
                 <div className="letter-word-step"><span>例词</span><strong>{letterExample}</strong></div>
+              </div> : science ? <div className="science-lesson">
+                <section><span>科学问题</span><strong>{science.question}</strong></section>
+                <section><span>观察方法</span><p>{science.method}</p></section>
+                <section><span>观察结果</span><p>{science.result}</p></section>
+                <section><span>过程与结果解释</span><p>{science.explanation}</p></section>
               </div> : <>
                 <h2>{item.prompt ?? item.title}</h2>
                 {item.kind === 'poem' && lessonDetail ? <div className="lesson-detail poem-detail">

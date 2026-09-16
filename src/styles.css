@@ -152,6 +152,15 @@ button:disabled { cursor: default; opacity: .45; }
 @keyframes lesson-speaking-button { to { transform: scale(1.12); background: #e36d85; } }
 .lesson-audio-status { min-height: 24px; padding-top: 6px; color: #706792; font-size: 10px; font-weight: 700; text-align: center; }
 .letter-read-flow { display: grid; width: 100%; max-width: 460px; align-items: center; margin: 10px 0 17px; grid-template-columns: 1fr 1fr; gap: 7px; }.letter-read-flow > div { display: flex; min-height: 74px; align-items: center; justify-content: center; padding: 10px; border-radius: 17px; background: #f1edff; flex-direction: column; }.letter-read-flow span { color: var(--muted); font-size: 9px; font-weight: 700; }.letter-read-flow strong { margin-top: 4px; color: var(--purple-dark); font-family: 'Fredoka', sans-serif; font-size: 32px; }.letter-read-flow > .letter-word-step { min-height: 58px; background: #e9f7f0; grid-column: 1 / -1; }.letter-read-flow > .letter-word-step strong { color: #347e64; font-size: 20px; }
+.science-lesson { display: grid; width: 100%; max-width: 560px; gap: 10px; margin: 4px 0 16px; }
+.science-lesson section { padding: 14px 16px; border: 1px solid #eaddea; border-radius: 18px; background: #fff; box-shadow: 0 5px 13px rgba(97,62,88,.05); }
+.science-lesson section:first-child { border-color: #f0bfd1; background: #fff1f6; }
+.science-lesson section:nth-child(2) { border-color: #bfe1d5; background: #effaf6; }
+.science-lesson section:nth-child(3) { border-color: #c9daf2; background: #f1f6fd; }
+.science-lesson section:nth-child(4) { border-color: #dfd2f2; background: #f7f2fc; }
+.science-lesson span { display: block; margin-bottom: 5px; color: #7d6d82; font-size: 12px; font-weight: 800; }
+.science-lesson strong { color: #543b5d; font-size: 20px; line-height: 1.45; }
+.science-lesson p { margin: 0; color: #594f60; font-size: 15px; line-height: 1.75; }
 .task-content h2 { max-width: 500px; margin: 10px 0; text-align: center; white-space: pre-line; }
 .lesson-detail { max-width: 520px; margin: 7px 0 18px; padding: 16px 18px; border-radius: 18px; background: #f7f2ec; color: #665e70; font-size: 14px; line-height: 2; text-align: center; white-space: pre-line; }
 .poem-detail { width: 100%; padding: 17px 20px 19px; }
@@ -173,12 +182,24 @@ button:disabled { cursor: default; opacity: .45; }
 .lab-toggle { margin: 0 20px; padding: 9px; border-radius: 13px; background: #eaf5ff; color: #3979a7; font-size: 11px; font-weight: 700; }
 
 .trace-area { display: flex; width: 100%; align-items: center; flex-direction: column; }
+.trace-instruction { width: min(100%, 520px); margin-bottom: 12px; padding: 13px 15px; border: 1px solid #ded3f2; border-radius: 18px; background: #f7f3ff; }
+.trace-instruction > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.trace-instruction b { color: var(--purple-dark); font-size: 17px; }
+.trace-instruction span { color: #7b7091; font-size: 12px; font-weight: 800; }
+.trace-instruction p { margin: 8px 0 10px; color: #514861; font-size: 15px; line-height: 1.65; }
+.trace-instruction small { display: block; min-height: 18px; margin-top: 5px; color: #75698f; font-size: 12px; text-align: center; }
+.trace-audio-button { width: 100%; min-height: 42px; border-radius: 14px; background: #e9e1fa; color: var(--purple-dark); font-size: 14px; font-weight: 800; }
 .trace-board { position: relative; width: min(300px, 78vw); height: min(300px, 65vw); overflow: hidden; border: 3px dashed #d8ccef; border-radius: 28px; background: #fff; touch-action: none; }
+.trace-board.step-finished { border-color: #75c7a6; box-shadow: 0 0 0 5px rgba(101,196,159,.12); }
 .trace-board::before, .trace-board::after { content: ''; position: absolute; background: #eee7f5; }.trace-board::before { top: 50%; right: 0; left: 0; height: 1px; }.trace-board::after { top: 0; bottom: 0; left: 50%; width: 1px; }
 .trace-board canvas { position: absolute; width: 100%; height: 100%; inset: 0; }
 .trace-guide { z-index: 1; pointer-events: none; }
 .trace-ink { z-index: 2; }
+.trace-step-status { min-height: 22px; margin: 9px 0 0; color: #776c82; font-size: 13px; font-weight: 700; }
+.trace-step-status.done { color: #29815f; }
 .button-row { display: flex; gap: 10px; margin-top: 14px; }.button-row button { min-width: 110px; }
+.trace-controls { width: min(100%, 520px); flex-wrap: wrap; justify-content: center; }
+.trace-controls button { flex: 1 1 135px; }
 
 .number-lab { --number-accent: var(--purple); position: relative; display: flex; width: 100%; max-width: 520px; min-height: 0; align-items: center; align-self: center; overflow-x: hidden; overflow-y: auto; flex: 1; flex-direction: column; justify-content: flex-start; padding: 16px 18px 6px; }
 .number-lab-heading { display: flex; width: 100%; align-items: center; justify-content: space-between; }

@@ -21,46 +21,78 @@ export function stopSpeech(): void {
   cancelCurrent = undefined;
 }
 
-export async function speak(text: string, enabled: boolean, language = 'auto'): Promise<void> {
+async function runSpeech(segments: string[], enabled: boolean, language: string, pauseMs: number): Promise<void> {
   stopSpeech();
-  if (!enabled || !text.trim()) return;
+  const parts = segments.map((part) => part.trim()).filter(Boolean);
+  if (!enabled || !parts.length) return;
   const controller = new AbortController();
-  const audio = new Audio();
-  let url: string | undefined;
+  let activeAudio: HTMLAudioElement | undefined;
   let rejectPlayback: ((reason: unknown) => void) | undefined;
+  let rejectPause: ((reason: unknown) => void) | undefined;
+  let pauseTimer: ReturnType<typeof setTimeout> | undefined;
+  const abortError = () => new DOMException('朗读已取消', 'AbortError');
   const cancel = () => {
     controller.abort();
-    audio.pause();
-    rejectPlayback?.(new DOMException('朗读已取消', 'AbortError'));
+    activeAudio?.pause();
+    rejectPlayback?.(abortError());
+    rejectPause?.(abortError());
+    if (pauseTimer !== undefined) globalThis.clearTimeout(pauseTimer);
   };
   cancelCurrent = cancel;
   try {
-    const response = await fetch(`${import.meta.env.BASE_URL}api/tts`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, language }), signal: controller.signal,
-    });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || '语音服务暂时不可用，请稍后再试');
+    for (const [index, text] of parts.entries()) {
+      controller.signal.throwIfAborted();
+      const response = await fetch(`${import.meta.env.BASE_URL}api/tts`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, language }), signal: controller.signal,
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || '语音服务暂时不可用，请稍后再试');
+      }
+      const blob = await response.blob();
+      controller.signal.throwIfAborted();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio();
+      activeAudio = audio;
+      audio.src = url;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          rejectPlayback = reject;
+          audio.onended = () => resolve();
+          audio.onerror = () => reject(new Error('音频播放失败，请重试'));
+          audio.play().catch(reject);
+        });
+      } finally {
+        rejectPlayback = undefined;
+        audio.pause();
+        audio.onended = null;
+        audio.onerror = null;
+        audio.removeAttribute('src');
+        URL.revokeObjectURL(url);
+        if (activeAudio === audio) activeAudio = undefined;
+      }
+      if (index < parts.length - 1) await new Promise<void>((resolve, reject) => {
+        rejectPause = reject;
+        pauseTimer = globalThis.setTimeout(() => {
+          pauseTimer = undefined;
+          rejectPause = undefined;
+          resolve();
+        }, Math.max(1000, pauseMs));
+      });
     }
-    const blob = await response.blob();
-    controller.signal.throwIfAborted();
-    url = URL.createObjectURL(blob);
-    audio.src = url;
-    await new Promise<void>((resolve, reject) => {
-      rejectPlayback = reject;
-      audio.onended = () => resolve();
-      audio.onerror = () => reject(new Error('音频播放失败，请重试'));
-      audio.play().catch(reject);
-    });
   } finally {
-    audio.pause();
-    audio.onended = null;
-    audio.onerror = null;
-    audio.removeAttribute('src');
-    if (url) URL.revokeObjectURL(url);
+    if (pauseTimer !== undefined) globalThis.clearTimeout(pauseTimer);
     if (cancelCurrent === cancel) cancelCurrent = undefined;
   }
+}
+
+export async function speak(text: string, enabled: boolean, language = 'auto'): Promise<void> {
+  return runSpeech([text], enabled, language, 0);
+}
+
+export async function speakSequence(segments: string[], enabled: boolean, language = 'auto', pauseMs = 1000): Promise<void> {
+  return runSpeech(segments, enabled, language, pauseMs);
 }
 
 export function speechError(error: unknown): string {

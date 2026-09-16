@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { speak, stopSpeech } from './audio';
+import { speak, speakSequence, stopSpeech } from './audio';
 
 class FakeAudio {
   static last: FakeAudio;
@@ -11,7 +11,7 @@ class FakeAudio {
   removeAttribute = vi.fn();
   constructor() { FakeAudio.last = this; }
 }
-afterEach(() => { stopSpeech(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { stopSpeech(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function setup() {
   vi.stubGlobal('Audio', FakeAudio);
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
@@ -43,5 +43,22 @@ describe('在线朗读生命周期', () => {
   it('服务端错误显示可读提示', async () => {
     setup(); vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: '语音服务尚未配置' }), { status: 503 })));
     await expect(speak('你好', true)).rejects.toThrow('语音服务尚未配置');
+  });
+  it('分段朗读在相邻内容之间至少停顿1秒', async () => {
+    vi.useFakeTimers();
+    setup();
+    const request = vi.fn().mockImplementation(async () => new Response('audio'));
+    vi.stubGlobal('fetch', request);
+    const job = speakSequence(['A', 'a'], true, 'en', 50);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeAudio.last.onended?.();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeAudio.last.onended?.();
+    await job;
   });
 });
