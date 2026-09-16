@@ -113,7 +113,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
 
         {showLab ? <NumberLab soundEnabled={soundEnabled} /> : (
           <main className={`task-content task-${item.kind}`}>
-            {item.kind === 'trace' ? <TraceCanvas glyph={item.title} soundEnabled={soundEnabled} onDone={() => setTraceReady(true)} /> : <>
+            {item.kind === 'trace' ? <TraceCanvas glyph={item.title} onDone={() => setTraceReady(true)} /> : <>
               <div className={`lesson-visual ${audioPlaying ? 'is-speaking' : ''}`}>
                 <span>{item.kind === 'character' || item.kind === 'word' || item.kind === 'letter' ? item.title : meta.icon}</span>
               </div>

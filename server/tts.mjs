@@ -53,9 +53,12 @@ export async function synthesize(text, language = 'auto', env = process.env, req
     const key = required(env, 'QWEN_API_KEY');
     const workspace = required(env, 'QWEN_WORKSPACE_ID');
     if (!/^[a-zA-Z0-9-]+$/.test(workspace)) throw new ServiceError('QWEN_WORKSPACE_ID 格式不正确', 503);
+    const voice = language === 'en'
+      ? env.QWEN_TTS_EN_VOICE || 'loongeva_v3.6'
+      : env.QWEN_TTS_VOICE || 'longanhuan_v3.6';
     const response = await post(`https://${workspace}.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer`, { Authorization: `Bearer ${key}` }, {
       model: env.QWEN_TTS_MODEL || 'qwen-audio-3.0-tts-flash',
-      input: { text, voice: env.QWEN_TTS_VOICE || 'longanhuan_v3.6', format: 'wav', sample_rate: 24000, rate: 0.85, ...(language === 'auto' ? {} : { language_hints: [language] }) },
+      input: { text, voice, format: 'wav', sample_rate: 24000, rate: 0.85, ...(language === 'auto' ? {} : { language_hints: [language] }) },
     });
     const data = await response.json();
     const url = data.output?.audio?.url;

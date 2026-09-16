@@ -18,7 +18,9 @@ export function lessonSpeechRequest(item: DailyItem, lessonDetail?: string): Les
   if (item.kind === 'letter') {
     const [upper = '', lower = upper.toLowerCase()] = item.title.trim().split(/\s+/);
     const example = englishExample(item.detail);
-    const segments = [upper, lower, example].filter((value): value is string => Boolean(value));
+    // 大小写字母的名称读音相同。合成时统一传大写形式，
+    // 避免单个小写 a / i 被英文模型当作冠词或代词。
+    const segments = [upper, upper, example].filter((value): value is string => Boolean(value));
     return {
       text: segments.join('. ') + '.',
       language: 'en',

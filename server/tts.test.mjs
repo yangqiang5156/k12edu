@@ -14,6 +14,13 @@ describe('三家在线语音协议', () => {
     expect(result.type).toBe('audio/wav');
     expect(result.bytes.toString()).toBe('wave');
   });
+  it('千问英文朗读使用官方美式英语音色', async () => {
+    const request = vi.fn().mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } })).mockResolvedValueOnce(new Response('wave'));
+    await synthesize('E', 'en', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request);
+    const input = JSON.parse(request.mock.calls[0][1].body).input;
+    expect(input.voice).toBe('loongeva_v3.6');
+    expect(input.language_hints).toEqual(['en']);
+  });
   it('千问临时音频下载遇到连接重置时自动重试', async () => {
     const request = vi.fn()
       .mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } }))

@@ -11,6 +11,29 @@ class FakeAudio {
   removeAttribute = vi.fn();
   constructor() { FakeAudio.last = this; }
 }
+
+class FakeBufferSource {
+  buffer: { duration: number } | null = null;
+  onended: (() => void) | null = null;
+  start = vi.fn();
+  stop = vi.fn();
+  connect = vi.fn();
+}
+
+class FakeAudioContext {
+  static last: FakeAudioContext;
+  currentTime = 10;
+  destination = {};
+  sources: FakeBufferSource[] = [];
+  resume = vi.fn(async () => {});
+  decodeAudioData = vi.fn(async () => ({ duration: 0.25 }));
+  constructor() { FakeAudioContext.last = this; }
+  createBufferSource() {
+    const source = new FakeBufferSource();
+    this.sources.push(source);
+    return source;
+  }
+}
 afterEach(() => { stopSpeech(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function setup() {
   vi.stubGlobal('Audio', FakeAudio);
@@ -45,20 +68,16 @@ describe('在线朗读生命周期', () => {
     await expect(speak('你好', true)).rejects.toThrow('语音服务尚未配置');
   });
   it('分段朗读在相邻内容之间至少停顿1秒', async () => {
-    vi.useFakeTimers();
-    setup();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
     const request = vi.fn().mockImplementation(async () => new Response('audio'));
     vi.stubGlobal('fetch', request);
-    const job = speakSequence(['A', 'a'], true, 'en', 50);
-    await vi.advanceTimersByTimeAsync(0);
-    FakeAudio.last.onended?.();
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
+    const job = speakSequence(['A', 'A'], true, 'en', 50);
+    await vi.waitFor(() => expect(FakeAudioContext.last.sources).toHaveLength(2));
     expect(request).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(0);
-    FakeAudio.last.onended?.();
+    expect(FakeAudioContext.last.resume).toHaveBeenCalledOnce();
+    expect(FakeAudioContext.last.sources[0].start).toHaveBeenCalledWith(10.05);
+    expect(FakeAudioContext.last.sources[1].start).toHaveBeenCalledWith(11.3);
+    FakeAudioContext.last.sources[1].onended?.();
     await job;
   });
 });

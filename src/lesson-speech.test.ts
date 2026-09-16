@@ -9,9 +9,9 @@ describe('课程朗读文本', () => {
       detail: '字母 B\n⚽ ball · 球'
     };
     expect(lessonSpeechRequest(item)).toEqual({
-      text: 'B. b. ball.',
+      text: 'B. B. ball.',
       language: 'en',
-      segments: ['B', 'b', 'ball'],
+      segments: ['B', 'B', 'ball'],
       pauseMs: 1000
     });
     expect(lessonSpeechRequest(item).text).not.toMatch(/[\u4e00-\u9fff⚽]/);
@@ -20,7 +20,7 @@ describe('课程朗读文本', () => {
 
   it('缺少例词时仍只朗读大小写字母', () => {
     const item: DailyItem = { id: 'letter-z', contentId: 'letter-z', kind: 'letter', title: 'Z z' };
-    expect(lessonSpeechRequest(item)).toEqual({ text: 'Z. z.', language: 'en', segments: ['Z', 'z'], pauseMs: 1000 });
+    expect(lessonSpeechRequest(item)).toEqual({ text: 'Z. Z.', language: 'en', segments: ['Z', 'Z'], pauseMs: 1000 });
   });
 
   it('其他课程保持原有自动语言朗读', () => {
