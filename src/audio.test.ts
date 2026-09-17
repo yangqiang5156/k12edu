@@ -3,39 +3,18 @@ import { speak, speakSequence, stopSpeech } from './audio';
 
 class FakeAudio {
   static last: FakeAudio;
+  static instances: FakeAudio[] = [];
   src = '';
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
   pause = vi.fn();
   play = vi.fn(async () => {});
   removeAttribute = vi.fn();
-  constructor() { FakeAudio.last = this; }
-}
-
-class FakeBufferSource {
-  buffer: { duration: number } | null = null;
-  onended: (() => void) | null = null;
-  start = vi.fn();
-  stop = vi.fn();
-  connect = vi.fn();
-}
-
-class FakeAudioContext {
-  static last: FakeAudioContext;
-  currentTime = 10;
-  destination = {};
-  sources: FakeBufferSource[] = [];
-  resume = vi.fn(async () => {});
-  decodeAudioData = vi.fn(async () => ({ duration: 0.25 }));
-  constructor() { FakeAudioContext.last = this; }
-  createBufferSource() {
-    const source = new FakeBufferSource();
-    this.sources.push(source);
-    return source;
-  }
+  constructor() { FakeAudio.last = this; FakeAudio.instances.push(this); }
 }
 afterEach(() => { stopSpeech(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function setup() {
+  FakeAudio.instances = [];
   vi.stubGlobal('Audio', FakeAudio);
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
@@ -67,17 +46,24 @@ describe('在线朗读生命周期', () => {
     setup(); vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: '语音服务尚未配置' }), { status: 503 })));
     await expect(speak('你好', true)).rejects.toThrow('语音服务尚未配置');
   });
-  it('分段朗读在相邻内容之间至少停顿1秒', async () => {
-    vi.stubGlobal('AudioContext', FakeAudioContext);
+  it('分段朗读复用同一播放器，并在相邻内容之间至少停顿1秒', async () => {
+    setup();
+    vi.useFakeTimers();
     const request = vi.fn().mockImplementation(async () => new Response('audio'));
     vi.stubGlobal('fetch', request);
     const job = speakSequence(['A', 'A'], true, 'en', 50);
-    await vi.waitFor(() => expect(FakeAudioContext.last.sources).toHaveLength(2));
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalledTimes(1));
     expect(request).toHaveBeenCalledTimes(2);
-    expect(FakeAudioContext.last.resume).toHaveBeenCalledOnce();
-    expect(FakeAudioContext.last.sources[0].start).toHaveBeenCalledWith(10.05);
-    expect(FakeAudioContext.last.sources[1].start).toHaveBeenCalledWith(11.3);
-    FakeAudioContext.last.sources[1].onended?.();
+    expect(FakeAudio.instances).toHaveLength(1);
+
+    FakeAudio.last.onended?.();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(FakeAudio.last.play).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeAudio.last.play).toHaveBeenCalledTimes(2);
+    FakeAudio.last.onended?.();
     await job;
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
   });
 });
