@@ -308,6 +308,7 @@ button:disabled { cursor: default; opacity: .45; }
 .form-card select { width: 100%; padding: 12px; border: 1px solid #ded7e8; border-radius: 12px; background: #fff; color: #39304f; font: inherit; }
 
 .cloud-auth-card label { display: flex; margin-top: 12px; color: #665e6e; flex-direction: column; font-size: 11px; font-weight: 700; }
+.cloud-auth-card form > small { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; }
 .cloud-auth-card input, .cloud-add-child input, .cloud-admin input { margin-top: 6px; padding: 11px; border: 1px solid #e3ddec; border-radius: 12px; background: white; color: #4e4755; outline: none; font: inherit; }
 .cloud-auth-card input:focus, .cloud-add-child input:focus, .cloud-admin input:focus { border-color: var(--purple); }
 .cloud-status { padding: 9px 11px; border-radius: 12px; background: #f4f0fb; color: #67558c !important; }

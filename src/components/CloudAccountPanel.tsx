@@ -6,6 +6,7 @@ import {
   publishAdminContentPack, updateAdminContentPack, uploadCloudSnapshot, type AdminContentPack, type AdminFamily, type AdminOverview, type CloudAccount, type CloudChild,
 } from '../cloud';
 import type { AppData, BackupEnvelopeV1 } from '../types';
+import { validateCloudCredentials } from '../cloud-auth-validation';
 
 interface Props {
   data: AppData;
@@ -81,6 +82,8 @@ export function CloudAccountPanel({ data, onRestore }: Props) {
   useEffect(() => { void refresh(); }, []);
 
   const submit = async () => {
+    const validationError = validateCloudCredentials(mode, email, password);
+    if (validationError) { setStatus(validationError); return; }
     setBusy(true); setStatus('');
     try {
       const next = mode === 'register' ? await registerFamily(email, password, data.settings.childName) : await loginFamily(email, password);
@@ -129,12 +132,14 @@ export function CloudAccountPanel({ data, onRestore }: Props) {
     <section className="parent-card cloud-auth-card">
       <h2>{mode === 'login' ? '登录家庭账号' : '创建家庭账号'}</h2>
       <p>不登录也可以继续学习；登录后可以云端备份、换机恢复和管理多个孩子。</p>
-      <label>家长邮箱<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} /></label>
-      <label>密码<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={10} value={password} onChange={event => setPassword(event.target.value)} /></label>
-      {mode === 'register' && <small>密码至少10个字符。孩子不需要单独账号。</small>}
-      {status && <p className="cloud-status" role="status">{status}</p>}
-      <button className="primary-button full-button" disabled={busy || !email || password.length < 10} onClick={() => void submit()}>{busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并同步本机进度'}</button>
-      <button className="soft-button full-button" disabled={busy} onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setStatus(''); }}>{mode === 'login' ? '还没有账号？创建家庭账号' : '已有账号？返回登录'}</button>
+      <form noValidate onSubmit={event => { event.preventDefault(); void submit(); }}>
+        <label>家长邮箱<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} /></label>
+        <label>密码<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={event => setPassword(event.target.value)} /></label>
+        {mode === 'register' && <small>密码至少10个字符。孩子不需要单独账号。</small>}
+        {status && <p className="cloud-status" role="status">{status}</p>}
+        <button type="submit" className="primary-button full-button" disabled={busy}>{busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并同步本机进度'}</button>
+        <button type="button" className="soft-button full-button" disabled={busy} onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setStatus(''); }}>{mode === 'login' ? '还没有账号？创建家庭账号' : '已有账号？返回登录'}</button>
+      </form>
     </section>
   </main>;
 
