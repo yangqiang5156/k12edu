@@ -1,3 +1,5 @@
+import { authorizedFetch } from './cloud';
+
 let context: AudioContext | undefined;
 export function playClick(enabled: boolean): void {
   if (!enabled) return;
@@ -15,6 +17,35 @@ export function playClick(enabled: boolean): void {
 }
 
 let cancelCurrent: (() => void) | undefined;
+
+async function audioCacheKey(text: string, language: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ version: 1, text, language })));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function speechBlob(text: string, language: string, signal: AbortSignal): Promise<Blob> {
+  const supportsCache = typeof caches !== 'undefined' && typeof location !== 'undefined';
+  const key = supportsCache ? await audioCacheKey(text, language) : '';
+  const request = supportsCache ? new Request(`${location.origin}${import.meta.env.BASE_URL}__audio-cache/${key}`) : undefined;
+  if (request) {
+    const cached = await (await caches.open('lexue-tts-v1')).match(request);
+    if (cached) return cached.blob();
+  }
+  const response = await authorizedFetch(`${import.meta.env.BASE_URL}api/tts`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, language }), signal,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || '语音服务暂时不可用，请稍后再试');
+  }
+  const blob = await response.blob();
+  if (request) {
+    const cache = await caches.open('lexue-tts-v1');
+    await cache.put(request, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' } })).catch(() => undefined);
+  }
+  return blob;
+}
 
 export function stopSpeech(): void {
   cancelCurrent?.();
@@ -44,15 +75,7 @@ async function runSpeech(segments: string[], enabled: boolean, language: string,
   cancelCurrent = cancel;
   try {
     const urls = await Promise.all(parts.map(async (text) => {
-      const response = await fetch(`${import.meta.env.BASE_URL}api/tts`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, language }), signal: controller.signal,
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.error || '语音服务暂时不可用，请稍后再试');
-      }
-      const blob = await response.blob();
+      const blob = await speechBlob(text, language, controller.signal);
       controller.signal.throwIfAborted();
       const url = URL.createObjectURL(blob);
       objectUrls.push(url);

@@ -15,9 +15,13 @@ RUN pnpm build
 
 FROM node:22-alpine
 WORKDIR /app
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
 COPY server ./server
 COPY --from=builder /app/dist ./dist
 ENV PORT=80
+ENV TTS_CACHE_DIR=/app/data/tts-cache
+VOLUME ["/app/data"]
 EXPOSE 80
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \
   CMD wget -q -O /dev/null http://127.0.0.1/healthz || exit 1

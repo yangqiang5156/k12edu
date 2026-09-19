@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: lexue-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lexue}
+      POSTGRES_USER: ${POSTGRES_USER:-lexue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请设置 POSTGRES_PASSWORD}
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lexue} -d ${POSTGRES_DB:-lexue}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [lexue]
+
+  lexue:
+    image: ${LEXUE_IMAGE:?请设置 LEXUE_IMAGE}
+    container_name: lexue
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env.runtime
+        required: true
+      - path: .env.tts
+        required: false
+    environment:
+      PORT: 80
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lexue}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-lexue}
+      DATABASE_REQUIRED: "true"
+      TTS_CACHE_DIR: /app/data/tts-cache
+    ports:
+      - "127.0.0.1:${LEXUE_PORT:-8080}:80"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    networks: [lexue]
+
+networks:
+  lexue:

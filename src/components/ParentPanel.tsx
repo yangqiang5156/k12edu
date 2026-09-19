@@ -1,11 +1,12 @@
 import { useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { dailyContentCount, MODULE_META, type AppData, type ContentItem, type ModuleId, type ParentSettings, type Redemption, type RewardDefinition, type Wallet } from '../types';
+import { dailyContentCount, MODULE_META, type AppData, type BackupEnvelopeV1, type ContentItem, type ModuleId, type ParentSettings, type Redemption, type RewardDefinition, type Wallet } from '../types';
 import { calculateWallet, completedDaysThisWeek, localDateKey } from '../logic';
-import { formatContentAge } from '../content-library';
+import { calculateContentCoverage, formatContentAge } from '../content-library';
 import { ContentLibraryManager } from './ContentLibraryManager';
 import { WeeklyReport } from './WeeklyReport';
 import { LearningHistory } from './LearningHistory';
 import { learnedContentIds as collectLearnedContentIds } from '../learning-history';
+import { CloudAccountPanel } from './CloudAccountPanel';
 
 interface Props {
   data: AppData;
@@ -22,12 +23,13 @@ interface Props {
   onImportBackup: (file: File) => Promise<void>;
   onImportContent: (file: File) => Promise<void>;
   onClear: () => Promise<void>;
+  onRestoreCloud: (backup: BackupEnvelopeV1) => Promise<void>;
 }
 
 const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六'];
-type Tab = 'overview' | 'settings' | 'history' | 'rewards' | 'data';
+type Tab = 'overview' | 'settings' | 'history' | 'rewards' | 'data' | 'account';
 
-export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption, onSaveReward, onAdjustWallet, onRemoveTaskItem, onAddLibraryTask, onSaveContent, onDeleteContent, onExport, onImportBackup, onImportContent, onClear }: Props) {
+export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption, onSaveReward, onAdjustWallet, onRemoveTaskItem, onAddLibraryTask, onSaveContent, onDeleteContent, onExport, onImportBackup, onImportContent, onClear, onRestoreCloud }: Props) {
   const [tab, setTab] = useState<Tab>('overview');
   const [draft, setDraft] = useState(data.settings);
   const [libraryPickerTaskId, setLibraryPickerTaskId] = useState<string>();
@@ -47,6 +49,11 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
   const pending = data.redemptions.filter((item) => item.status === 'pending');
   const completedCount = todayPlan?.modules.filter((item) => item.collectedAt).length ?? 0;
   const learnedContentIds = useMemo(() => collectLearnedContentIds(data.plans, data.completions), [data.plans, data.completions]);
+  const contentCoverage = useMemo(() => Object.entries(MODULE_META).map(([id, meta]) => ({
+    id: id as ModuleId,
+    meta,
+    coverage: calculateContentCoverage(data.content, id as ModuleId, meta.target)
+  })), [data.content]);
 
   const fileHandler = (handler: (file: File) => Promise<void>) => async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -61,7 +68,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         <div><span className="eyebrow">家长中心</span><h1>{draft.childName}的成长看板</h1></div>
       </header>
       <nav className="parent-tabs">
-        {([['overview', '看板'], ['settings', '任务'], ['history', '历史'], ['rewards', '奖励'], ['data', '数据']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
+        {([['overview', '看板'], ['settings', '任务'], ['history', '历史'], ['rewards', '奖励'], ['data', '数据'], ['account', '账号']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
       </nav>
 
       {tab === 'overview' && <main className="parent-body">
@@ -151,10 +158,15 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
 
       {tab === 'data' && !contentManagerOpen && <main className="parent-body">
         <section className="parent-card"><h2>内容库</h2>
-          {Object.entries(MODULE_META).map(([id, meta]) => <div className="content-count" key={id}><span>{meta.icon} {meta.title}</span><div><i style={{ width: `${Math.min(100, data.content.filter((item) => item.module === id && item.kind !== 'reader' && item.kind !== 'classic').length / meta.target * 100)}%` }} /></div><strong>{data.content.filter((item) => item.module === id && item.kind !== 'reader' && item.kind !== 'classic').length}/{meta.target}</strong></div>)}
+          <p className="content-count-help">数字表示当前可安排资料数量；进度条以建议内容量为参考，不是资料库容量上限。</p>
+          {contentCoverage.map(({ id, meta, coverage }) => <div className="content-count" key={id}>
+            <span>{meta.icon} {meta.title}</span>
+            <div role="progressbar" aria-label={`${meta.title}内容覆盖`} aria-valuemin={0} aria-valuemax={coverage.target} aria-valuenow={Math.min(coverage.current, coverage.target)}><i style={{ width: `${coverage.percent}%` }} /></div>
+            <strong><b>{coverage.current} 条</b><small className={coverage.reached ? 'reached' : ''}>{coverage.reached ? `已达 ${coverage.target} 条建议基准` : `建议 ${coverage.target} 条，还差 ${coverage.remaining}`}</small></strong>
+          </div>)}
           <button className="primary-button full-button" onClick={() => setContentManagerOpen(true)}>管理全部 {data.content.length} 条资料</button>
           <button className="soft-button full-button" onClick={() => contentInput.current?.click()}>＋ 导入 ContentPackV1</button><input hidden ref={contentInput} type="file" accept="application/json" onChange={fileHandler(onImportContent)} />
-          <small>绘本仅管理进度。请只导入已获授权的内容或正版资源链接。</small>
+          <small>上方条数不含经典古文和英语绘本，它们仍可在“管理全部”中查看。请只导入已获授权的内容或正版资源链接。</small>
         </section>
         <section className="parent-card"><h2>本地数据保护</h2><p>应用已申请持久存储，但清理浏览器数据或卸载仍可能删除记录。请定期备份。</p>
           <button className="primary-button full-button" onClick={onExport}>↓ 导出完整备份</button>
@@ -162,6 +174,8 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         </section>
         <section className="parent-card danger-zone"><h2>危险操作</h2><button onClick={async () => { if (window.confirm('确定清空所有学习进度、积分和兑换记录吗？内容库和设置会保留。')) await onClear(); }}>清空学习数据</button></section>
       </main>}
+
+      {tab === 'account' && <CloudAccountPanel data={data} onRestore={onRestoreCloud} />}
     </div>
   );
 }

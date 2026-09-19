@@ -10,6 +10,7 @@ import { ParentPanel } from './components/ParentPanel';
 import { Pet } from './components/Pet';
 import { PinGate } from './components/PinGate';
 import { TaskModal } from './components/TaskModal';
+import { scheduleCloudUpload } from './cloud';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -93,6 +94,10 @@ function App() {
   const currentPlan = data?.plans.find((plan) => plan.date === today);
   const wallet = useMemo(() => calculateWallet(data?.ledger ?? []), [data?.ledger]);
   const activeTask = currentPlan?.modules.find((task) => task.id === activeTaskId);
+
+  useEffect(() => {
+    if (data) scheduleCloudUpload(createBackup(data));
+  }, [data]);
 
   const toast = (message: string) => {
     setNotice(message);
@@ -190,6 +195,14 @@ function App() {
     } catch (error) { toast(error instanceof SyntaxError ? '备份不是有效的 JSON 文件' : error instanceof Error ? error.message : '恢复失败，原数据已保留'); }
   };
 
+  const restoreCloudBackup = async (backup: import('./types').BackupEnvelopeV1) => {
+    if (data) downloadJson(`乐学云恢复前备份-${today}.json`, createBackup(data));
+    await restoreBackup(backup);
+    await refresh();
+    setActiveTaskId(undefined);
+    toast('云端学习记录已恢复');
+  };
+
   const importContentFile = async (file: File) => {
     try {
       const validation = validateContentPack(JSON.parse(await file.text()));
@@ -250,6 +263,7 @@ function App() {
       onRemoveTaskItem={removeTaskItem} onAddLibraryTask={addLibraryTask}
       onSaveContent={upsertContent} onDeleteContent={removeContent}
       onExport={() => downloadJson(`乐学备份-${today}.json`, createBackup(data))} onImportBackup={importBackupFile} onImportContent={importContentFile}
+      onRestoreCloud={restoreCloudBackup}
       onClear={async () => { try { await clearUserData(); await refresh(); setActiveTaskId(undefined); toast('学习数据已清空，今日计划已重新生成'); } catch { toast('清空失败，请重试'); } }} />
     {needRefresh && <div className="update-banner"><span>新版本准备好啦</span><button onClick={() => updateServiceWorker(true)}>立即更新</button><button onClick={() => setNeedRefresh(false)}>稍后</button></div>}
     {notice && <div className="global-toast">{notice}</div>}

@@ -82,7 +82,7 @@ const SYSTEM_PROMPT = `你是面向 3–12 岁儿童的严谨课程资料编辑�
 5. 只有用户原话明确给出正版 http/https 链接时才能填写 url，否则必须为 null。不要声称模型生成内容已经经过权威来源核验。
 JSON 示例：{"module":"math","kind":"math-choice","title":"5以内加法","subtitle":null,"body":null,"prompt":"桌上有2个苹果，又放来1个，一共有几个？","options":["2","3","4"],"answer":"3","stage":1,"ageMin":4,"ageMax":5,"tags":["数学","加法"],"url":null}`;
 
-async function requestCompletion(prompt, feedback, env, request, signal) {
+async function requestCompletion(prompt, feedback, env, request, signal, onUsage) {
   const apiKey = env.DEEPSEEK_API_KEY?.trim();
   if (!apiKey) throw new ContentGenerationError('智能新增尚未配置：DEEPSEEK_API_KEY', 503);
   const response = await request('https://api.deepseek.com/chat/completions', {
@@ -102,6 +102,7 @@ async function requestCompletion(prompt, feedback, env, request, signal) {
     signal,
   });
   const data = await response.json().catch(() => ({}));
+  onUsage?.(data?.usage);
   if (!response.ok) {
     const detail = text(data?.error?.message, 180);
     throw new ContentGenerationError(detail ? `DeepSeek 请求失败：${detail}` : `DeepSeek 请求失败（${response.status}），请检查密钥、模型或额度`, response.status === 401 ? 503 : 502);
@@ -111,11 +112,11 @@ async function requestCompletion(prompt, feedback, env, request, signal) {
   try { return JSON.parse(content); } catch { throw new ContentGenerationError('DeepSeek 返回的资料格式不正确'); }
 }
 
-export async function generateContent(prompt, env = process.env, request = fetch, signal = AbortSignal.timeout(60000)) {
+export async function generateContent(prompt, env = process.env, request = fetch, signal = AbortSignal.timeout(60000), onUsage) {
   let feedback = '';
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      return validateGeneratedContent(await requestCompletion(prompt, feedback, env, request, signal));
+      return validateGeneratedContent(await requestCompletion(prompt, feedback, env, request, signal, onUsage));
     } catch (error) {
       if (error.status === 503 || signal.aborted) throw error;
       feedback = error instanceof Error ? error.message : '返回内容不完整';
@@ -125,7 +126,8 @@ export async function generateContent(prompt, env = process.env, request = fetch
   throw new ContentGenerationError('智能生成失败，请换一种说法后重试');
 }
 
-export function createContentGeneratorMiddleware(env = process.env, request = fetch) {
+export function createContentGeneratorMiddleware(env = process.env, request = fetch, services = {}) {
+  const usage = services.usage;
   let active = 0;
   let windowStart = Date.now();
   let calls = 0;
@@ -161,7 +163,14 @@ export function createContentGeneratorMiddleware(env = process.env, request = fe
       if (!data || typeof data.prompt !== 'string' || !data.prompt.trim() || data.prompt.trim().length > 500) {
         throw new ContentGenerationError('请用 1–500 个字符描述要新增的资料', 400);
       }
-      send(200, { item: await generateContent(data.prompt.trim(), env, request, controller.signal) });
+      const identity = usage ? await usage.authorize(req, 'ai') : undefined;
+      if (usage) await usage.assertGlobalBudget('ai');
+      let tokens = 0;
+      const item = await generateContent(data.prompt.trim(), env, request, controller.signal, (providerUsage) => {
+        tokens += Number(providerUsage?.total_tokens || providerUsage?.totalTokens || 0);
+      });
+      if (usage) await usage.record(identity, { ai_requests: 1, ai_tokens: tokens || Math.ceil(data.prompt.trim().length / 2) });
+      send(200, { item });
     } catch (error) {
       send(error.status || (controller.signal.aborted ? 504 : 502), {
         error: error instanceof ContentGenerationError ? error.message : controller.signal.aborted ? '智能生成超时，请稍后重试' : '智能生成暂时不可用，请检查网络或服务配置',

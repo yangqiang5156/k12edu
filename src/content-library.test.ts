@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createContentDraft, ensureContentAge, filterContentLibrary, formatContentAge, normalizeContentItem } from './content-library';
+import { calculateContentCoverage, createContentDraft, ensureContentAge, filterContentLibrary, formatContentAge, normalizeContentItem } from './content-library';
 import type { ContentItem } from './types';
 
 const items: ContentItem[] = [
@@ -30,5 +30,14 @@ describe('资料库管理', () => {
     expect(filterContentLibrary(aged, 'all', '', 4)).toHaveLength(2);
     expect(filterContentLibrary(aged, 'all', '', 8).map((item) => item.id)).toEqual(['poem-x']);
     expect(formatContentAge(aged[0])).toBe('适合4–8岁');
+  });
+
+  it('内容超过建议基准时保留真实条数，并将参考进度封顶', () => {
+    const coverage = calculateContentCoverage([
+      ...Array.from({ length: 3 }, (_, index): ContentItem => ({ id: `word-${index}`, module: 'english', kind: 'word', title: `word ${index}`, source: 'builtin' })),
+      { id: 'reader-1', module: 'english', kind: 'reader', title: '绘本', source: 'builtin' }
+    ], 'english', 2);
+
+    expect(coverage).toEqual({ current: 3, target: 2, percent: 100, remaining: 0, reached: true });
   });
 });

@@ -1,8 +1,9 @@
 import { normalizeContentItem } from './content-library';
 import type { ContentItem } from './types';
+import { authorizedFetch } from './cloud';
 
 export async function generateContentFromPrompt(prompt: string, signal?: AbortSignal): Promise<ContentItem> {
-  const response = await fetch(`${import.meta.env.BASE_URL}api/content/generate`, {
+  const response = await authorizedFetch(`${import.meta.env.BASE_URL}api/content/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),

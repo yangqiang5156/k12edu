@@ -3,16 +3,33 @@ import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { createTtsMiddleware } from './tts.mjs';
 import { createContentGeneratorMiddleware } from './content-generator.mjs';
+import { createDatabase, initializeDatabase } from './database.mjs';
+import { createIdentityService } from './identity.mjs';
+import { createUsageService } from './usage.mjs';
+import { createAudioCache } from './audio-cache.mjs';
 
 const root = resolve('dist');
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
-const tts = createTtsMiddleware();
-const contentGenerator = createContentGeneratorMiddleware();
-createServer((req, res) => {
-  void contentGenerator(req, res, () => tts(req, res, async () => {
+const database = createDatabase();
+await initializeDatabase(database);
+const identity = createIdentityService(database);
+const usage = createUsageService(database, identity);
+const audioCache = createAudioCache();
+const tts = createTtsMiddleware(process.env, fetch, { usage, cache: audioCache });
+const contentGenerator = createContentGeneratorMiddleware(process.env, fetch, { usage });
+const server = createServer((req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  void identity.handle(req, res, () => contentGenerator(req, res, () => tts(req, res, async () => {
     try {
       const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-      if (path === '/healthz') { res.end('ok\n'); return; }
+      if (path === '/healthz') {
+        const healthy = !database.configured || await database.health();
+        res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(healthy ? 'ok\n' : 'database unavailable\n');
+        return;
+      }
       if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return; }
       if (!['GET', 'HEAD'].includes(req.method)) { res.writeHead(405); res.end(); return; }
       let file = resolve(root, '.' + path);
@@ -32,5 +49,13 @@ createServer((req, res) => {
       });
       res.end(req.method === 'HEAD' ? undefined : data);
     } catch { res.writeHead(404); res.end('文件不存在'); }
-  }));
-}).listen(Number(process.env.PORT || 80), process.env.HOST || '0.0.0.0', () => console.log('乐学在线语音服务已启动'));
+  })));
+});
+
+server.listen(Number(process.env.PORT || 80), process.env.HOST || '0.0.0.0', () => {
+  console.log(`乐学服务已启动；PostgreSQL=${database.configured ? '已配置' : '未配置'}；OSS=${audioCache.ossEnabled ? '已配置' : '未配置'}`);
+});
+
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
+  server.close(() => void database.close().finally(() => process.exit(0)));
+});

@@ -11,6 +11,26 @@ export const CONTENT_KINDS_BY_MODULE: Record<ModuleId, Array<{ id: ContentKind; 
 
 export const CONTENT_AGE_OPTIONS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
+export interface ContentCoverage {
+  current: number;
+  target: number;
+  percent: number;
+  remaining: number;
+  reached: boolean;
+}
+
+export function calculateContentCoverage(items: ContentItem[], module: ModuleId, target: number): ContentCoverage {
+  const current = items.filter((item) => item.module === module && item.kind !== 'reader' && item.kind !== 'classic').length;
+  const safeTarget = Math.max(1, target);
+  return {
+    current,
+    target: safeTarget,
+    percent: Math.min(100, current / safeTarget * 100),
+    remaining: Math.max(0, safeTarget - current),
+    reached: current >= safeTarget
+  };
+}
+
 function defaultAgeRange(item: Pick<ContentItem, 'kind' | 'stage'>): { ageMin: number; ageMax: number } {
   if (item.kind === 'math-choice') {
     const ranges = [[4, 5], [4, 6], [5, 6], [5, 7], [5, 7], [6, 8]];

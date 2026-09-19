@@ -9,10 +9,16 @@
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "node --env-file-if-exists=.env server/index.mjs"
+    "test:cloud": "node scripts/cloud-smoke.mjs",
+    "test:infra": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/infrastructure-smoke.mjs",
+    "test:tts-cache": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/tts-cache-smoke.mjs",
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "start:local": "node --env-file-if-exists=.env --env-file-if-exists=.env.local server/index.mjs"
   },
   "dependencies": {
+    "ali-oss": "^6.23.0",
     "idb": "^8.0.3",
+    "pg": "^8.23.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "workbox-window": "^7.4.0"

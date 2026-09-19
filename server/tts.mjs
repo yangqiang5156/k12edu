@@ -108,6 +108,10 @@ export async function synthesize(text, language = 'auto', env = process.env, req
 }
 
 export function createTtsMiddleware(env = process.env, request = fetch) {
+  const services = arguments[2] || {};
+  const usage = services.usage;
+  const cache = services.cache;
+  const inflight = new Map();
   let active = 0;
   let windowStart = Date.now();
   let calls = 0;
@@ -115,6 +119,17 @@ export function createTtsMiddleware(env = process.env, request = fetch) {
     const path = (req.url || '').split('?')[0];
     if (path !== '/api/tts') return next();
     const sendError = (status, error) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ error })); } };
+    const sendAudio = (audio, cacheState, key) => {
+      if (res.destroyed) return;
+      res.writeHead(200, {
+        'Content-Type': audio.type,
+        'Content-Length': audio.bytes.length,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        ETag: `"${key}"`,
+        'X-Lexue-Audio-Cache': cacheState,
+      });
+      res.end(audio.bytes);
+    };
     if (req.method !== 'POST') return sendError(405, '请使用 POST 请求');
     if (!req.headers['content-type']?.startsWith('application/json')) return sendError(415, '请使用 JSON 请求');
     if (req.headers['sec-fetch-site'] === 'cross-site') return sendError(403, '不允许跨站朗读请求');
@@ -137,8 +152,31 @@ export function createTtsMiddleware(env = process.env, request = fetch) {
       try { data = JSON.parse(body); } catch { throw new ServiceError('请求内容不是有效 JSON', 400); }
       if (!data || typeof data.text !== 'string' || !data.text.trim() || data.text.length > 3000) throw new ServiceError('朗读文本需要为 1–3000 个字符', 400);
       if (data.language !== undefined && !['auto', 'zh', 'en'].includes(data.language)) throw new ServiceError('朗读语言不受支持', 400);
-      const audio = await synthesize(data.text.trim(), data.language, env, request, controller.signal);
-      if (!res.destroyed) { res.writeHead(200, { 'Content-Type': audio.type, 'Cache-Control': 'no-store' }); res.end(audio.bytes); }
+      const text = data.text.trim();
+      const identity = usage ? await usage.authorize(req, 'tts') : undefined;
+      const provider = env.TTS_PROVIDER || 'qwen';
+      const model = provider === 'qwen' ? env.QWEN_TTS_MODEL || 'qwen-audio-3.0-tts-flash'
+        : provider === 'minimax' ? env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo' : env.DOUBAO_TTS_RESOURCE_ID || 'seed-tts-2.0';
+      const voice = provider === 'qwen' ? (data.language === 'en' ? env.QWEN_TTS_EN_VOICE || 'loongeva_v3.6' : env.QWEN_TTS_VOICE || 'longanhuan_v3.6')
+        : provider === 'minimax' ? env.MINIMAX_TTS_VOICE || 'female-shaonv' : env.DOUBAO_TTS_VOICE || 'zh_female_vv_uranus_bigtts';
+      const key = cache?.keyFor({ provider, model, voice, language: data.language || 'auto', text }) || `${provider}-${Buffer.from(text).toString('base64url').slice(0, 64)}`;
+      const cached = cache ? await cache.get(key) : undefined;
+      if (cached) {
+        if (usage) await usage.record(identity, { tts_requests: 1, tts_cache_hits: 1, tts_characters: text.length });
+        sendAudio(cached, cached.source, key);
+        return;
+      }
+      if (usage) await usage.assertGlobalBudget('tts');
+      const joined = inflight.has(key);
+      if (!joined) {
+        const promise = synthesize(text, data.language, env, request, controller.signal)
+          .then(async (audio) => { if (cache) await cache.put(key, audio); return audio; })
+          .finally(() => inflight.delete(key));
+        inflight.set(key, promise);
+      }
+      const audio = await inflight.get(key);
+      if (usage) await usage.record(identity, { tts_requests: 1, tts_upstream: joined ? 0 : 1, tts_cache_hits: joined ? 1 : 0, tts_characters: text.length, tts_upstream_characters: joined ? 0 : text.length });
+      sendAudio(audio, joined ? 'coalesced' : 'miss', key);
     } catch (error) {
       sendError(error.status || (controller.signal.aborted ? 504 : 502), error instanceof ServiceError ? error.message : controller.signal.aborted ? '朗读超时，请稍后重试' : '语音服务暂时不可用，请检查网络或服务配置');
     } finally {

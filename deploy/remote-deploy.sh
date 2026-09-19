@@ -56,7 +56,9 @@ docker image inspect "$LEXUE_IMAGE" >/dev/null
 rm -f "$LEXUE_IMAGE_ARCHIVE" "$LEXUE_IMAGE_ARCHIVE.sha256"
 
 write_env "$LEXUE_IMAGE"
-docker compose -f "$COMPOSE_FILE" up -d --pull never --remove-orphans lexue
+# PostgreSQL 由 compose.postgres-only.yaml 独立管理，但共享同一项目网络。
+# 这里不能使用 --remove-orphans，否则发布应用时会误删数据库容器。
+docker compose -f "$COMPOSE_FILE" up -d --pull never lexue
 
 if wait_healthy; then
   printf '乐学已部署：%s\n' "$LEXUE_IMAGE"
@@ -68,7 +70,7 @@ docker logs --tail 100 "$CONTAINER_NAME" >&2 || true
 
 if [ -n "$previous_image" ]; then
   write_env "$previous_image"
-  docker compose -f "$COMPOSE_FILE" up -d --pull never --remove-orphans lexue
+  docker compose -f "$COMPOSE_FILE" up -d --pull never lexue
   if wait_healthy; then
     printf '已回滚到：%s\n' "$previous_image" >&2
   else
