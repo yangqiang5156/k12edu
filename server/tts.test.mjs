@@ -9,7 +9,7 @@ describe('三家在线语音协议', () => {
     const request = vi.fn().mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } })).mockResolvedValueOnce(new Response('wave'));
     const result = await synthesize('一百零五。One Hundred and Five.', 'auto', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request);
     expect(request.mock.calls[0][0]).toContain('llm-test.cn-beijing.maas.aliyuncs.com');
-    expect(JSON.parse(request.mock.calls[0][1].body).model).toBe('qwen-audio-3.0-tts-flash');
+    expect(JSON.parse(request.mock.calls[0][1].body).model).toBe('qwen-audio-3.1-tts-flash');
     expect(request.mock.calls[1][1].headers).toBeUndefined();
     expect(result.type).toBe('audio/wav');
     expect(result.bytes.toString()).toBe('wave');
@@ -18,8 +18,18 @@ describe('三家在线语音协议', () => {
     const request = vi.fn().mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } })).mockResolvedValueOnce(new Response('wave'));
     await synthesize('E', 'en', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request);
     const input = JSON.parse(request.mock.calls[0][1].body).input;
-    expect(input.voice).toBe('loongeva_v3.6');
+    expect(input.voice).toBe('Abby_v3.1');
     expect(input.language_hints).toEqual(['en']);
+  });
+  it('切换到千问 3.1 时自动替换旧版不兼容音色', async () => {
+    const request = vi.fn().mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } })).mockResolvedValueOnce(new Response('wave'));
+    await synthesize('你好', 'zh', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test', QWEN_TTS_MODEL: 'qwen-audio-3.1-tts-flash', QWEN_TTS_VOICE: 'longanhuan_v3.6' }, request);
+    expect(JSON.parse(request.mock.calls[0][1].body).input.voice).toBe('longanhuan_v3.1');
+  });
+  it('故事录音可以按学段设置语速，不改变课程朗读默认值', async () => {
+    const request = vi.fn().mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } })).mockResolvedValueOnce(new Response('wave'));
+    await synthesize('[empathetic]慢慢听故事。', 'zh', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request, AbortSignal.timeout(1000), { rate: 1 });
+    expect(JSON.parse(request.mock.calls[0][1].body).input.rate).toBe(1);
   });
   it('千问临时音频下载遇到连接重置时自动重试', async () => {
     const request = vi.fn()

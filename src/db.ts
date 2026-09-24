@@ -20,6 +20,8 @@ import { DEFAULT_DAILY_CONTENT_COUNTS, type LearningEvent, type LearningAction }
 import { applyLearningAction, ensureTodayPlan } from './learning';
 import { calculateWallet, localDateKey, regenerateDailyPlanForSettings } from './logic';
 import { assertContent, validateBackup, validateContentPack, validateSettings } from './validation';
+import { DEFAULT_STORY_SETTINGS } from './stories';
+import type { StoryListenEvent, StoryProgress } from './story-types';
 
 interface LexueDB extends DBSchema {
   learningEvents: { key: string; value: LearningEvent };
@@ -33,6 +35,8 @@ interface LexueDB extends DBSchema {
   reports: { key: string; value: DailyReport };
   contentPacks: { key: string; value: ContentPackRecord };
   rewardDefinitions: { key: string; value: RewardDefinition };
+  storyProgress: { key: string; value: StoryProgress };
+  storyListenEvents: { key: string; value: StoryListenEvent };
 }
 
 export const DEFAULT_SETTINGS: ParentSettings = {
@@ -45,7 +49,8 @@ export const DEFAULT_SETTINGS: ParentSettings = {
   dailyContentCounts: DEFAULT_DAILY_CONTENT_COUNTS,
   soundEnabled: true,
   reduceMotion: false,
-  petId: 'stella'
+  petId: 'stella',
+  storySettings: DEFAULT_STORY_SETTINGS
 };
 
 export const DEFAULT_PARENT_PIN = '2580';
@@ -56,9 +61,13 @@ let databasePromise: Promise<IDBPDatabase<LexueDB>> | undefined;
 
 function database(): Promise<IDBPDatabase<LexueDB>> {
   if (!databasePromise) {
-    databasePromise = openDB<LexueDB>(DB_NAME, 2, {
+    databasePromise = openDB<LexueDB>(DB_NAME, 3, {
       upgrade(db, oldVersion) {
         if (oldVersion < 2) db.createObjectStore('learningEvents', { keyPath: 'id' });
+        if (oldVersion < 3) {
+          db.createObjectStore('storyProgress', { keyPath: 'id' });
+          db.createObjectStore('storyListenEvents', { keyPath: 'id' });
+        }
         if (oldVersion >= 1) return;
         db.createObjectStore('settings');
         const content = db.createObjectStore('content', { keyPath: 'id' });
@@ -139,27 +148,31 @@ export async function seedDatabase(): Promise<void> {
   }
 }
 
-const STORES = ['settings', 'content', 'plans', 'completions', 'ledger', 'pet', 'redemptions', 'reports', 'contentPacks', 'rewardDefinitions', 'learningEvents'] as const;
+const STORES = ['settings', 'content', 'plans', 'completions', 'ledger', 'pet', 'redemptions', 'reports', 'contentPacks', 'rewardDefinitions', 'learningEvents', 'storyProgress', 'storyListenEvents'] as const;
 type DataTransaction = IDBPTransaction<LexueDB, typeof STORES, 'readwrite'>;
 
 async function snapshot(tx: DataTransaction): Promise<AppData> {
-  const [settings, content, plans, completions, ledger, pet, redemptions, reports, contentPacks, rewardDefinitions, learningEvents] = await Promise.all([
+  const [settings, content, plans, completions, ledger, pet, redemptions, reports, contentPacks, rewardDefinitions, learningEvents, storyProgress, storyListenEvents] = await Promise.all([
     tx.objectStore('settings').get('parent'), tx.objectStore('content').getAll(), tx.objectStore('plans').getAll(),
     tx.objectStore('completions').getAll(), tx.objectStore('ledger').getAll(), tx.objectStore('pet').get('current'),
     tx.objectStore('redemptions').getAll(), tx.objectStore('reports').getAll(), tx.objectStore('contentPacks').getAll(),
-    tx.objectStore('rewardDefinitions').getAll(), tx.objectStore('learningEvents').getAll()
+    tx.objectStore('rewardDefinitions').getAll(), tx.objectStore('learningEvents').getAll(), tx.objectStore('storyProgress').getAll(), tx.objectStore('storyListenEvents').getAll()
   ]);
   return { settings: settings ?? DEFAULT_SETTINGS, content, plans, completions, ledger,
-    pet: pet ?? { id: 'current', selected: 'stella', mood: 80, fedCount: 0 }, redemptions, reports, contentPacks, rewardDefinitions, learningEvents };
+    pet: pet ?? { id: 'current', selected: 'stella', mood: 80, fedCount: 0 }, redemptions, reports, contentPacks, rewardDefinitions, learningEvents, storyProgress, storyListenEvents };
 }
 
 async function persistSnapshot(tx: DataTransaction, next: AppData, previous?: AppData) {
   if (next.settings !== previous?.settings) await tx.objectStore('settings').put(next.settings, 'parent');
   if (next.pet !== previous?.pet) await tx.objectStore('pet').put(next.pet);
-  for (const store of ['content', 'plans', 'completions', 'ledger', 'redemptions', 'reports', 'contentPacks', 'rewardDefinitions', 'learningEvents'] as const) {
+  for (const store of ['content', 'plans', 'completions', 'ledger', 'redemptions', 'reports', 'contentPacks', 'rewardDefinitions', 'learningEvents', 'storyProgress', 'storyListenEvents'] as const) {
     if (next[store] === previous?.[store]) continue;
     const old = new Set<unknown>(previous?.[store] ?? []);
     for (const value of next[store] ?? []) if (!old.has(value)) await tx.objectStore(store).put(value);
+  }
+  if (next.storyListenEvents !== previous?.storyListenEvents && previous?.storyListenEvents) {
+    const keep = new Set((next.storyListenEvents ?? []).map(event => event.id));
+    for (const event of previous.storyListenEvents) if (!keep.has(event.id)) await tx.objectStore('storyListenEvents').delete(event.id);
   }
 }
 
@@ -186,6 +199,29 @@ export async function loadAppData(date = localDateKey()): Promise<AppData> {
 
 export async function recordLearning(taskId: string, itemId: string, action: LearningAction): Promise<AppData> {
   return mutateAppData(data => applyLearningAction(data, taskId, itemId, action));
+}
+
+export async function saveStoryListening(progress: StoryProgress, event?: StoryListenEvent): Promise<AppData> {
+  return mutateAppData(data => {
+    const prior = data.storyProgress ?? [];
+    const existing = prior.find(item => item.id === progress.id);
+    const storyProgress = [...prior.filter(item => item.id !== progress.id), {
+      ...progress,
+      favorite: progress.favorite ?? existing?.favorite ?? false,
+      completionCount: Math.max(progress.completionCount, existing?.completionCount ?? 0)
+    }];
+    const storyListenEvents = event && event.listenedSeconds >= 10
+      ? [...(data.storyListenEvents ?? []).filter(item => item.id !== event.id), event].slice(-500)
+      : (data.storyListenEvents ?? []);
+    const date = event?.date ?? localDateKey();
+    const eligible = data.settings.storySettings?.allowDailyReward && event?.completed && event.listenedSeconds >= 10
+      && !(data.ledger.some(item => item.sourceId === `story-daily-${date}`));
+    const ledger = eligible ? [...data.ledger, {
+      id: `story-daily-${date}`, date, createdAt: new Date().toISOString(), reason: '听完故事',
+      sourceId: `story-daily-${date}`, currency: 'stars' as const, delta: 1
+    }] : data.ledger;
+    return { ...data, storyProgress, storyListenEvents, ledger };
+  });
 }
 
 export async function updateLearningSettings(settings: ParentSettings): Promise<AppData> {
@@ -294,8 +330,9 @@ export async function restoreBackup(backup: BackupEnvelopeV1): Promise<void> {
     dailyContentCounts: { ...DEFAULT_DAILY_CONTENT_COUNTS, ...restored.settings.dailyContentCounts },
     childAge: restored.settings.childAge ?? 4,
     mathStartStage: restored.settings.mathStartStage ?? 1,
-    englishStart: restored.settings.englishStart ?? 'letters'
-  } });
+    englishStart: restored.settings.englishStart ?? 'letters',
+    storySettings: { ...DEFAULT_STORY_SETTINGS, ...restored.settings.storySettings }
+  }, storyProgress: restored.storyProgress ?? [], storyListenEvents: restored.storyListenEvents ?? [] });
   const tx = (await database()).transaction(STORES, 'readwrite');
   try {
     for (const store of STORES) await tx.objectStore(store).clear();
@@ -312,8 +349,8 @@ export async function clearUserData(): Promise<void> {
   const tx = (await database()).transaction(STORES, 'readwrite');
   try {
     const data = await snapshot(tx);
-    for (const store of ['plans', 'completions', 'ledger', 'redemptions', 'reports', 'learningEvents'] as const) await tx.objectStore(store).clear();
-    const next = ensureTodayPlan({ ...data, plans: [], completions: [], ledger: [], redemptions: [], reports: [], learningEvents: [],
+    for (const store of ['plans', 'completions', 'ledger', 'redemptions', 'reports', 'learningEvents', 'storyProgress', 'storyListenEvents'] as const) await tx.objectStore(store).clear();
+    const next = ensureTodayPlan({ ...data, plans: [], completions: [], ledger: [], redemptions: [], reports: [], learningEvents: [], storyProgress: [], storyListenEvents: [],
       pet: { id: 'current', selected: data.settings.petId, mood: 80, fedCount: 0 } });
     await persistSnapshot(tx, next, data);
     await tx.done;

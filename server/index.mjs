@@ -9,7 +9,7 @@ import { createUsageService } from './usage.mjs';
 import { createAudioCache } from './audio-cache.mjs';
 
 const root = resolve('dist');
-const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg' };
 const database = createDatabase();
 await initializeDatabase(database);
 const identity = createIdentityService(database);
@@ -37,16 +37,33 @@ const server = createServer((req, res) => {
       if (path.endsWith('/')) file = resolve(file, 'index.html');
       const data = await readFile(file);
       const noStore = path === '/' || path.endsWith('/index.html') || path.endsWith('/sw.js') || path.endsWith('/manifest.webmanifest');
-      const cacheControl = path.startsWith('/assets/')
+      const cacheControl = path.startsWith('/assets/') || path.startsWith('/stories/')
         ? 'public, max-age=31536000, immutable'
         : noStore
           ? 'no-store, no-cache, must-revalidate, max-age=0'
           : 'no-cache, must-revalidate';
-      res.writeHead(200, {
+      const baseHeaders = {
         'Content-Type': mime[extname(file)] || 'application/octet-stream',
         'Cache-Control': cacheControl,
         ...(noStore ? { Pragma: 'no-cache', Expires: '0' } : {}),
-      });
+      };
+      if (extname(file) === '.mp3') {
+        const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
+        if (req.headers.range && !range) {
+          res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${data.length}` }); res.end(); return;
+        }
+        if (range) {
+          const start = Number(range[1]);
+          const end = range[2] ? Number(range[2]) : data.length - 1;
+          if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= data.length || end < start) {
+            res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${data.length}` }); res.end(); return;
+          }
+          const last = Math.min(end, data.length - 1);
+          res.writeHead(206, { ...baseHeaders, 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${last}/${data.length}`, 'Content-Length': last - start + 1 });
+          res.end(req.method === 'HEAD' ? undefined : data.subarray(start, last + 1)); return;
+        }
+      }
+      res.writeHead(200, { ...baseHeaders, ...(extname(file) === '.mp3' ? { 'Accept-Ranges': 'bytes' } : {}), 'Content-Length': data.length });
       res.end(req.method === 'HEAD' ? undefined : data);
     } catch { res.writeHead(404); res.end('文件不存在'); }
   })));

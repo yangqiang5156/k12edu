@@ -7,6 +7,8 @@ import { WeeklyReport } from './WeeklyReport';
 import { LearningHistory } from './LearningHistory';
 import { learnedContentIds as collectLearnedContentIds } from '../learning-history';
 import { CloudAccountPanel } from './CloudAccountPanel';
+import { DEFAULT_STORY_SETTINGS, STORIES, STORY_THEMES } from '../stories';
+import type { StoryTheme } from '../story-types';
 
 interface Props {
   data: AppData;
@@ -49,6 +51,10 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
   const pending = data.redemptions.filter((item) => item.status === 'pending');
   const completedCount = todayPlan?.modules.filter((item) => item.collectedAt).length ?? 0;
   const learnedContentIds = useMemo(() => collectLearnedContentIds(data.plans, data.completions), [data.plans, data.completions]);
+  const storyDraft = { ...DEFAULT_STORY_SETTINGS, ...draft.storySettings };
+  const updateStoryDraft = (changes: Partial<typeof storyDraft>) => setDraft({ ...draft, storySettings: { ...storyDraft, ...changes } });
+  const storyEvents = [...(data.storyListenEvents ?? [])].sort((a, b) => b.endedAt.localeCompare(a.endedAt));
+  const recentStorySeconds = storyEvents.filter(event => Date.now() - Date.parse(event.endedAt) < 7 * 86400000).reduce((sum, event) => sum + event.listenedSeconds, 0);
   const contentCoverage = useMemo(() => Object.entries(MODULE_META).map(([id, meta]) => ({
     id: id as ModuleId,
     meta,
@@ -108,6 +114,15 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
           })}
           <label className="switch-row"><span>🔊 按钮和朗读声音</span><input type="checkbox" checked={draft.soundEnabled} onChange={(e) => setDraft({ ...draft, soundEnabled: e.target.checked })} /></label>
           <label className="switch-row"><span>🌿 减少动态效果</span><input type="checkbox" checked={draft.reduceMotion} onChange={(e) => setDraft({ ...draft, reduceMotion: e.target.checked })} /></label>
+          <div className="story-parent-settings"><h3>故事屋设置</h3>
+            <label className="switch-row"><span>开启故事屋</span><input type="checkbox" checked={storyDraft.enabled} onChange={event => updateStoryDraft({ enabled: event.target.checked })} /></label>
+            <label>每天收听时间<select value={storyDraft.dailyLimitMinutes} onChange={event => updateStoryDraft({ dailyLimitMinutes: Number(event.target.value) as typeof storyDraft.dailyLimitMinutes })}>{[0, 10, 20, 30, 45, 60].map(value => <option key={value} value={value}>{value === 0 ? '不限时' : `${value} 分钟`}</option>)}</select></label>
+            <p className="setting-hint">达到上限后，正在听的故事可以播完；之后无法开始下一篇。</p>
+            <label className="switch-row"><span>自动播放下一篇</span><input type="checkbox" checked={storyDraft.autoplayNext} onChange={event => updateStoryDraft({ autoplayNext: event.target.checked })} /></label>
+            <label className="switch-row"><span>每天听完故事奖励 1 星光</span><input type="checkbox" checked={storyDraft.allowDailyReward} onChange={event => updateStoryDraft({ allowDailyReward: event.target.checked })} /></label>
+            <details><summary>隐藏故事主题</summary><div className="story-parent-options">{Object.entries(STORY_THEMES).map(([id, label]) => <label key={id}><input type="checkbox" checked={storyDraft.hiddenThemes.includes(id as StoryTheme)} onChange={event => updateStoryDraft({ hiddenThemes: event.target.checked ? [...storyDraft.hiddenThemes, id as StoryTheme] : storyDraft.hiddenThemes.filter(value => value !== id) })} />{label}</label>)}</div></details>
+            <details><summary>隐藏单篇故事</summary><div className="story-parent-options">{STORIES.map(story => <label key={story.id}><input type="checkbox" checked={storyDraft.hiddenStoryIds.includes(story.id)} onChange={event => updateStoryDraft({ hiddenStoryIds: event.target.checked ? [...storyDraft.hiddenStoryIds, story.id] : storyDraft.hiddenStoryIds.filter(value => value !== story.id) })} />{story.title}</label>)}</div></details>
+          </div>
           <span className="field-label">学习伙伴</span><div className="pet-picker">{([['stella', '小兔子', '🐰'], ['archie', '阿奇', '🐶'], ['marie', '玛丽猫', '🐱']] as const).map(([id, name, icon]) => <button key={id} className={draft.petId === id ? 'selected' : ''} onClick={() => setDraft({ ...draft, petId: id })}>{icon}<span>{name}</span></button>)}</div>
           <button className="primary-button" onClick={async () => { try { await onSaveSettings({ ...draft, childAge: draft.childAge ?? 4, mathStartStage: draft.mathStartStage ?? 1, englishStart: draft.englishStart ?? 'letters' }); } catch { /* 页面由保存方显示错误，保留草稿便于重试。 */ } }}>保存学习设置</button>
         </section>
@@ -141,7 +156,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         </section>
       </main>}
 
-      {tab === 'history' && <LearningHistory events={data.learningEvents ?? []} plans={data.plans} completions={data.completions} totalContent={data.content.length} />}
+      {tab === 'history' && <><LearningHistory events={data.learningEvents ?? []} plans={data.plans} completions={data.completions} totalContent={data.content.length} /><main className="parent-body"><section className="parent-card"><h2>故事收听</h2><p>近 7 天有效收听 {Math.round(recentStorySeconds / 60)} 分钟 · 已听过 {(data.storyProgress ?? []).filter(item => item.positionSeconds > 0).length} 篇</p>{storyEvents.slice(0, 20).map(event => <div className="report-row" key={event.id}><span>{event.date} · {event.title}</span><strong>{Math.round(event.listenedSeconds / 60)} 分钟{event.completed ? ' ✓' : ''}</strong></div>)}{!storyEvents.length && <p>还没有故事收听记录。</p>}</section></main></>}
 
       {tab === 'rewards' && <main className="parent-body">
         {pending.length > 0 && <section className="parent-card pending-card"><h2>待确认兑换</h2>{pending.map((item) => <div className="pending-row" key={item.id}><span>{item.rewardTitle}</span><div><button onClick={() => onResolveRedemption(item, false)}>拒绝</button><button className="approve" onClick={() => onResolveRedemption(item, true)}>同意</button></div></div>)}</section>}

@@ -1,3 +1,5 @@
+import type { StoryListenEvent, StoryProgress, StorySettings } from './story-types';
+
 export type ModuleId = 'guoxue' | 'literacy' | 'math' | 'english' | 'writing' | 'science';
 
 export type ContentKind =
@@ -48,6 +50,7 @@ export interface ParentSettings {
   soundEnabled: boolean;
   reduceMotion: boolean;
   petId: 'stella' | 'archie' | 'marie';
+  storySettings?: StorySettings;
   pinPolicyVersion?: number;
   pinSalt?: string;
   pinHash?: string;
@@ -194,6 +197,8 @@ export interface BackupEnvelopeV1 {
     reports: DailyReport[];
     contentPacks: ContentPackRecord[];
     rewardDefinitions: RewardDefinition[];
+    storyProgress?: StoryProgress[];
+    storyListenEvents?: StoryListenEvent[];
   };
 }
 

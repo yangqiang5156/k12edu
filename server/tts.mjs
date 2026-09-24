@@ -11,6 +11,16 @@ const required = (env, name) => {
   if (!env[name]?.trim()) throw new ServiceError(`语音服务尚未配置：${name}`, 503);
   return env[name].trim();
 };
+const qwenConfiguration = (env, language) => {
+  const model = env.QWEN_TTS_MODEL || 'qwen-audio-3.1-tts-flash';
+  const modern = model === 'qwen-audio-3.1-tts-flash';
+  const configured = language === 'en' ? env.QWEN_TTS_EN_VOICE : env.QWEN_TTS_VOICE;
+  const legacy = language === 'en' ? 'loongeva_v3.6' : 'longanhuan_v3.6';
+  const voice = modern && (!configured || configured === legacy)
+    ? language === 'en' ? 'Abby_v3.1' : 'longanhuan_v3.1'
+    : configured || legacy;
+  return { model, voice };
+};
 
 const wait = (milliseconds, signal) => new Promise((resolve, reject) => {
   const timer = setTimeout(resolve, milliseconds);
@@ -40,7 +50,7 @@ async function downloadWithRetry(url, request, signal) {
   throw lastError;
 }
 
-export async function synthesize(text, language = 'auto', env = process.env, request = fetch, signal = AbortSignal.timeout(45000)) {
+export async function synthesize(text, language = 'auto', env = process.env, request = fetch, signal = AbortSignal.timeout(45000), options = {}) {
   const provider = env.TTS_PROVIDER || 'qwen';
   const post = async (url, headers, body) => {
     const response = await request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
@@ -53,12 +63,10 @@ export async function synthesize(text, language = 'auto', env = process.env, req
     const key = required(env, 'QWEN_API_KEY');
     const workspace = required(env, 'QWEN_WORKSPACE_ID');
     if (!/^[a-zA-Z0-9-]+$/.test(workspace)) throw new ServiceError('QWEN_WORKSPACE_ID 格式不正确', 503);
-    const voice = language === 'en'
-      ? env.QWEN_TTS_EN_VOICE || 'loongeva_v3.6'
-      : env.QWEN_TTS_VOICE || 'longanhuan_v3.6';
+    const { model, voice } = qwenConfiguration(env, language);
     const response = await post(`https://${workspace}.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer`, { Authorization: `Bearer ${key}` }, {
-      model: env.QWEN_TTS_MODEL || 'qwen-audio-3.0-tts-flash',
-      input: { text, voice, format: 'wav', sample_rate: 24000, rate: 0.85, ...(language === 'auto' ? {} : { language_hints: [language] }) },
+      model,
+      input: { text, voice, format: 'wav', sample_rate: 24000, rate: options.rate ?? 0.85, ...(language === 'auto' ? {} : { language_hints: [language] }) },
     });
     const data = await response.json();
     const url = data.output?.audio?.url;
@@ -155,9 +163,9 @@ export function createTtsMiddleware(env = process.env, request = fetch) {
       const text = data.text.trim();
       const identity = usage ? await usage.authorize(req, 'tts') : undefined;
       const provider = env.TTS_PROVIDER || 'qwen';
-      const model = provider === 'qwen' ? env.QWEN_TTS_MODEL || 'qwen-audio-3.0-tts-flash'
+      const model = provider === 'qwen' ? qwenConfiguration(env, data.language).model
         : provider === 'minimax' ? env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo' : env.DOUBAO_TTS_RESOURCE_ID || 'seed-tts-2.0';
-      const voice = provider === 'qwen' ? (data.language === 'en' ? env.QWEN_TTS_EN_VOICE || 'loongeva_v3.6' : env.QWEN_TTS_VOICE || 'longanhuan_v3.6')
+      const voice = provider === 'qwen' ? qwenConfiguration(env, data.language).voice
         : provider === 'minimax' ? env.MINIMAX_TTS_VOICE || 'female-shaonv' : env.DOUBAO_TTS_VOICE || 'zh_female_vv_uranus_bigtts';
       const key = cache?.keyFor({ provider, model, voice, language: data.language || 'auto', text }) || `${provider}-${Buffer.from(text).toString('base64url').slice(0, 64)}`;
       const cached = cache ? await cache.get(key) : undefined;

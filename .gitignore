@@ -8,6 +8,7 @@ release/
 .env.*
 !.env.example
 coverage/
+.cache/story-production/
 .playwright-cli/
 *.tsbuildinfo
 vite.config.js

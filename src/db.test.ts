@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDB } from 'idb';
-import { clearUserData, createBackup, DEFAULT_SETTINGS, importContentPack, loadAppData, mutateAppData, recordLearning, resolveReward, restoreBackup, updateLearningSettings } from './db';
+import { clearUserData, createBackup, DEFAULT_SETTINGS, importContentPack, loadAppData, mutateAppData, recordLearning, resolveReward, restoreBackup, saveStoryListening, updateLearningSettings } from './db';
 import { calculateWallet, localDateKey } from './logic';
 import { validateBackup } from './validation';
 
@@ -16,7 +16,7 @@ describe('IndexedDB 事务与恢复', () => {
     const data = await loadAppData();
     expect(data.plans.some(plan => plan.date === localDateKey())).toBe(true);
     await clearUserData();
-    const db = await openDB('lexue-workbench', 2);
+    const db = await openDB('lexue-workbench', 3);
     expect(await db.get('plans', localDateKey())).toBeDefined();
     expect(await db.count('learningEvents')).toBe(0);
     db.close();
@@ -50,7 +50,7 @@ describe('IndexedDB 事务与恢复', () => {
     const backup = createBackup({ ...before, plans: [], learningEvents: undefined });
     expect(validateBackup(backup).ok).toBe(true);
     await restoreBackup(backup);
-    const db = await openDB('lexue-workbench', 2);
+    const db = await openDB('lexue-workbench', 3);
     expect(await db.get('plans', localDateKey())).toBeDefined();
     db.close();
   });
@@ -98,5 +98,21 @@ describe('IndexedDB 事务与恢复', () => {
     await importContentPack(pack);
     await expect(importContentPack({ ...pack, id: `${id}-2`, items: [{ ...pack.items[0], id: `${id}-new` }, pack.items[0]] })).rejects.toThrow('已存在');
     expect((await loadAppData()).content.some(item => item.id === `${id}-new`)).toBe(false);
+  });
+  it('故事进度随备份恢复，每日可选奖励只发一次', async () => {
+    const date = localDateKey(); const now = new Date().toISOString();
+    await updateLearningSettings({ ...DEFAULT_SETTINGS, storySettings: { ...DEFAULT_SETTINGS.storySettings!, allowDailyReward: true } });
+    const progress = { id: 'tortoise-hare', audioVersion: 'v1', positionSeconds: 40, durationSeconds: 43,
+      heardRanges: [[0, 40]] as Array<[number, number]>, completionCount: 1, completedAt: now, favorite: true, lastListenedAt: now };
+    const event = { id: 'story-session', storyId: progress.id, title: '龟兔赛跑', date, startedAt: now, endedAt: now, listenedSeconds: 40, completed: true };
+    await saveStoryListening(progress, event);
+    await saveStoryListening(progress, event);
+    expect((await loadAppData()).ledger.filter(item => item.sourceId === `story-daily-${date}`)).toHaveLength(1);
+    const backup = createBackup(await loadAppData());
+    await clearUserData();
+    expect((await loadAppData()).storyProgress).toHaveLength(0);
+    await restoreBackup(backup);
+    expect((await loadAppData()).storyProgress?.[0].favorite).toBe(true);
+    expect((await loadAppData()).storyListenEvents?.[0].title).toBe('龟兔赛跑');
   });
 });

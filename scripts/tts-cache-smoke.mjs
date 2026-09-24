@@ -18,9 +18,9 @@ const { token } = await guestResponse.json();
 const cache = createAudioCache(process.env);
 if (!cache.ossEnabled) throw new Error('应用没有启用 OSS 缓存');
 const provider = process.env.TTS_PROVIDER || 'qwen';
-const model = provider === 'qwen' ? process.env.QWEN_TTS_MODEL || 'qwen-audio-3.0-tts-flash'
+const model = provider === 'qwen' ? process.env.QWEN_TTS_MODEL || 'qwen-audio-3.1-tts-flash'
   : provider === 'minimax' ? process.env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo' : process.env.DOUBAO_TTS_RESOURCE_ID || 'seed-tts-2.0';
-const voice = provider === 'qwen' ? process.env.QWEN_TTS_VOICE || 'longanhuan_v3.6'
+const voice = provider === 'qwen' ? process.env.QWEN_TTS_VOICE || (model === 'qwen-audio-3.1-tts-flash' ? 'longanhuan_v3.1' : 'longanhuan_v3.6')
   : provider === 'minimax' ? process.env.MINIMAX_TTS_VOICE || 'female-shaonv' : process.env.DOUBAO_TTS_VOICE || 'zh_female_vv_uranus_bigtts';
 const key = cache.keyFor({ provider, model, voice, language, text });
 const directory = process.env.TTS_CACHE_DIR || join(process.cwd(), '.cache', 'tts');

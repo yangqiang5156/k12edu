@@ -98,8 +98,14 @@ docker run --rm --env-file .env -e PORT=80 -p 8080:80 lexue:local
 
 ## 在线语音朗读
 
-默认模型为 `qwen-audio-3.0-tts-flash`。配置模板见 [.env.example](.env.example)，详细接入与部署见 [在线语音配置](docs/在线语音配置.md)。
+默认模型已切换为 `qwen-audio-3.1-tts-flash`，中文音色为 `longanhuan_v3.1`；此前发布的 3 篇长版录音仍保留原模型音频，不重复产生合成费用。配置模板见 [.env.example](.env.example)，详细接入与部署见 [在线语音配置](docs/在线语音配置.md)。
 
 服务端 `TTS_PROVIDER` 可设置为 `qwen`、`doubao`、`minimax`。配置修改后重启服务即可切换，密钥不进入前端构建。数字按完整中英文文本合成，汉字、字母、国学和科学讲解统一调用在线接口；已删除离线音频、生成脚本和词元拼接。断网时课程与进度仍可使用，朗读显示联网提示。
 
 生产环境使用 Node.js 22.16+，运行 `pnpm build` 后用 `pnpm start` 启动（默认端口 80；示例配置为 8080）。Docker 已包含 Node 服务。纯静态 ZIP 不包含语音服务。
+
+## 故事屋（本地试用版）
+
+首页「故事时间」可进入故事屋，收听 40 篇分龄故事，其中幼儿园阶段 20 篇。支持筛选、播放进度、续听、收藏、倍速、睡眠定时和家长时长设置。达到每日上限时，当前故事可听完，随后停止。故事进度和收听记录进入本地及家庭云备份，故事正文和 MP3 不进入家庭快照。
+
+40 篇长版扩写稿保存在 `src/data/story-drafts.json`，均已生成分龄长版 MP3 与逐句时间点。播放、拖动、续听和倍速时，正在朗读的句子会高亮。前 3 篇沿用已完成的千问 3.0 录音；其余 37 篇使用千问 3.1 及对应音色完成，没有修改账号付费保护。6 篇短于目标下限的成片做了安全范围内的保音高变速，并同步校正时间点，原始文件留在忽略的本地制作缓存中。重新制作可运行 `node --env-file=.env scripts/build-story-audio.mjs`，随后运行 `node scripts/normalize-story-audio.mjs` 与 `node scripts/publish-story-recordings.mjs` 校验后发布。正式对外发布前还需逐篇试听并完成内容、事实和版权审核。方案与待完成项见 [故事屋 MVP 产品方案](docs/故事屋MVP产品方案.md)。

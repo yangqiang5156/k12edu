@@ -1,4 +1,5 @@
 import type { BackupEnvelopeV1, ContentItem, ContentPackV1, ParentSettings } from './types';
+import { STORY_THEMES } from './stories';
 
 const kinds: Record<string, string[]> = { guoxue: ['poem', 'classic'], literacy: ['character'], math: ['math-choice'], english: ['letter', 'word', 'reader'], writing: ['trace'], science: ['science'] };
 const record = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -48,7 +49,11 @@ export function validateSettings(value: unknown): value is ParentSettings {
     && optional(value.englishStart, v => v === 'letters' || v === 'words')
     && optional(value.dailyContentCounts, v => record(v) && Object.entries(v).every(([key, count]) => moduleId(key) && integer(count, 1, 10)))
     && optional(value.pinPolicyVersion, v => integer(v, 1))
-    && optional(value.pinHash, string) && optional(value.pinSalt, string) && Boolean(value.pinHash) === Boolean(value.pinSalt);
+    && optional(value.pinHash, string) && optional(value.pinSalt, string) && Boolean(value.pinHash) === Boolean(value.pinSalt)
+    && optional(value.storySettings, v => record(v) && typeof v.enabled === 'boolean'
+      && [0, 10, 20, 30, 45, 60].includes(Number(v.dailyLimitMinutes))
+      && typeof v.autoplayNext === 'boolean' && typeof v.allowDailyReward === 'boolean'
+      && strings(v.hiddenStoryIds) && Array.isArray(v.hiddenThemes) && v.hiddenThemes.every(t => typeof t === 'string' && Object.hasOwn(STORY_THEMES, t)));
 }
 
 export function validateContentPack(value: unknown): { ok: true; pack: ContentPackV1 } | { ok: false; errors: string[] } {
@@ -106,6 +111,12 @@ export function validateBackup(value: unknown): { ok: true; backup: BackupEnvelo
       && kinds[String(e.module)].includes(String(e.kind)) && typeof e.isReview === 'boolean' && ['independent', 'assisted', 'practice', 'unknown'].includes(String(e.outcome))
       && integer(e.attempts, 0) && integer(e.wrongAttempts, 0, Number(e.attempts)) && optional(e.firstAnswerCorrect, v => typeof v === 'boolean')
       && optional(e.completedAt, timestamp) && timestamp(e.updatedAt) && optional(e.legacy, v => typeof v === 'boolean')))) throw new Error('逐条学习记录格式无效');
+    if (!optional(d.storyProgress, v => unique(v, 'id', e => string(e.audioVersion) && typeof e.favorite === 'boolean'
+      && integer(e.completionCount, 0) && typeof e.positionSeconds === 'number' && e.positionSeconds >= 0
+      && typeof e.durationSeconds === 'number' && e.durationSeconds >= 0 && timestamp(e.lastListenedAt)
+      && optional(e.completedAt, timestamp) && Array.isArray(e.heardRanges) && e.heardRanges.every(range => Array.isArray(range) && range.length === 2 && range.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0))))) throw new Error('故事进度格式无效');
+    if (!optional(d.storyListenEvents, v => unique(v, 'id', e => string(e.storyId) && string(e.title) && date(e.date)
+      && timestamp(e.startedAt) && timestamp(e.endedAt) && integer(e.listenedSeconds, 0) && typeof e.completed === 'boolean'))) throw new Error('故事收听记录格式无效');
     return { ok: true, backup: value as unknown as BackupEnvelopeV1 };
   } catch (error) { return { ok: false, error: error instanceof Error ? error.message : '备份格式无效' }; }
 }

@@ -110,7 +110,7 @@ export function CloudAccountPanel({ data, onRestore }: Props) {
         const fresh = createBackup({
           ...data,
           settings: { ...data.settings, childName: child.name },
-          plans: [], completions: [], ledger: [], redemptions: [], reports: [], learningEvents: [],
+          plans: [], completions: [], ledger: [], redemptions: [], reports: [], learningEvents: [], storyProgress: [], storyListenEvents: [],
           pet: { id: 'current', selected: data.settings.petId, mood: 80, fedCount: 0 },
         });
         selectCloudChild(child.id);
