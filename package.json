@@ -1,7 +1,7 @@
 {
   "name": "lexue-workbench",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -12,6 +12,7 @@
     "test:cloud": "node scripts/cloud-smoke.mjs",
     "test:infra": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/infrastructure-smoke.mjs",
     "test:tts-cache": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/tts-cache-smoke.mjs",
+    "stories:upload": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/upload-story-audio.mjs",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "start:local": "node --env-file-if-exists=.env --env-file-if-exists=.env.local server/index.mjs"
   },
