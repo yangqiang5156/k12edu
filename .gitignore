@@ -9,6 +9,7 @@ release/
 !.env.example
 coverage/
 .cache/story-production/
+public/stories/*.mp3
 .playwright-cli/
 *.tsbuildinfo
 vite.config.js

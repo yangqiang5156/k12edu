@@ -46,6 +46,20 @@ describe('在线朗读生命周期', () => {
     setup(); vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: '语音服务尚未配置' }), { status: 503 })));
     await expect(speak('你好', true)).rejects.toThrow('语音服务尚未配置');
   });
+  it('云语音额度用完时使用设备自带朗读', async () => {
+    setup();
+    class FakeUtterance {
+      text: string; lang = ''; rate = 1; onend?: () => void; onerror?: (event: { error: string }) => void;
+      constructor(text: string) { this.text = text; }
+    }
+    const deviceSpeech = { cancel: vi.fn(), speak: vi.fn((utterance: FakeUtterance) => queueMicrotask(() => utterance.onend?.())) };
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance);
+    vi.stubGlobal('speechSynthesis', deviceSpeech);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: '千问免费语音额度已用完' }), { status: 429 })));
+    await speak('春眠不觉晓。', true, 'zh');
+    expect(deviceSpeech.speak).toHaveBeenCalledTimes(1);
+    expect(deviceSpeech.speak.mock.calls[0][0]).toMatchObject({ text: '春眠不觉晓。', lang: 'zh-CN', rate: 0.85 });
+  });
   it('分段朗读复用同一播放器，并在相邻内容之间至少停顿1秒', async () => {
     setup();
     vi.useFakeTimers();

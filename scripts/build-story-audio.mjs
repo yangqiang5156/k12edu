@@ -9,7 +9,7 @@ const publishedCues = JSON.parse(await readFile(new URL('../src/data/story-cues.
 let drafts;
 try { drafts = JSON.parse(await readFile(new URL('../src/data/story-drafts.json', import.meta.url), 'utf8')); } catch { drafts = []; }
 const cache = new URL('../.cache/story-production/', import.meta.url).pathname;
-const audioDir = new URL('../public/stories/', import.meta.url).pathname;
+const audioDir = join(cache, 'final');
 await mkdir(join(cache, 'clips'), { recursive: true });
 await mkdir(join(cache, 'cues'), { recursive: true });
 await mkdir(audioDir, { recursive: true });
@@ -17,7 +17,7 @@ const selected = process.argv.includes('--story') ? process.argv[process.argv.in
 const availableOnly = process.argv.includes('--available');
 const force = process.argv.includes('--force');
 const model = process.env.QWEN_TTS_MODEL || 'qwen-audio-3.1-tts-flash';
-const voice = process.env.QWEN_TTS_VOICE || (model === 'qwen-audio-3.1-tts-flash' ? 'longanhuan_v3.1' : 'longanhuan_v3.6');
+const voice = process.env.QWEN_TTS_VOICE || 'longanhuan_v3.1';
 if ((process.env.TTS_PROVIDER || 'qwen') !== 'qwen') throw new Error('故事录制目前仅支持项目配置的千问语音服务');
 
 function sentences(paragraph) {

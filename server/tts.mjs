@@ -4,21 +4,17 @@ import { randomUUID } from 'node:crypto';
 // 优先 IPv4，避免部分本地网络的 IPv6 路由导致云语音连接重置。
 setDefaultResultOrder('ipv4first');
 
-class ServiceError extends Error {
-  constructor(message, status = 502) { super(message); this.status = status; }
+export class ServiceError extends Error {
+  constructor(message, status = 502, code) { super(message); this.status = status; this.code = code; }
 }
 const required = (env, name) => {
   if (!env[name]?.trim()) throw new ServiceError(`语音服务尚未配置：${name}`, 503);
   return env[name].trim();
 };
-const qwenConfiguration = (env, language) => {
-  const model = env.QWEN_TTS_MODEL || 'qwen-audio-3.1-tts-flash';
-  const modern = model === 'qwen-audio-3.1-tts-flash';
-  const configured = language === 'en' ? env.QWEN_TTS_EN_VOICE : env.QWEN_TTS_VOICE;
-  const legacy = language === 'en' ? 'loongeva_v3.6' : 'longanhuan_v3.6';
-  const voice = modern && (!configured || configured === legacy)
-    ? language === 'en' ? 'Abby_v3.1' : 'longanhuan_v3.1'
-    : configured || legacy;
+export const qwenConfiguration = (env, language, overrides = {}) => {
+  const model = overrides.model || env.QWEN_TTS_MODEL || 'qwen-audio-3.1-tts-flash';
+  const configured = overrides.voice || (language === 'en' ? env.QWEN_TTS_EN_VOICE : env.QWEN_TTS_VOICE);
+  const voice = configured || (language === 'en' ? 'Abby_v3.1' : 'longanhuan_v3.1');
   return { model, voice };
 };
 
@@ -54,7 +50,17 @@ export async function synthesize(text, language = 'auto', env = process.env, req
   const provider = env.TTS_PROVIDER || 'qwen';
   const post = async (url, headers, body) => {
     const response = await request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
-    if (!response.ok) throw new ServiceError(`语音服务请求失败（${response.status}），请检查服务配置或额度`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const code = typeof data?.code === 'string' ? data.code : undefined;
+      const quota = code === 'AllocationQuota.FreeTierOnly';
+      const message = quota
+        ? '千问免费语音额度已用完，请在百炼补充余额或关闭“仅使用免费额度”后重试'
+        : typeof data?.message === 'string' && data.message.trim()
+          ? `语音服务请求失败：${data.message.trim().slice(0, 180)}`
+          : `语音服务请求失败（${response.status}），请检查服务配置或额度`;
+      throw new ServiceError(message, quota ? 429 : response.status === 401 || response.status === 403 ? 503 : 502, code);
+    }
     return response;
   };
   let bytes;
@@ -63,7 +69,7 @@ export async function synthesize(text, language = 'auto', env = process.env, req
     const key = required(env, 'QWEN_API_KEY');
     const workspace = required(env, 'QWEN_WORKSPACE_ID');
     if (!/^[a-zA-Z0-9-]+$/.test(workspace)) throw new ServiceError('QWEN_WORKSPACE_ID 格式不正确', 503);
-    const { model, voice } = qwenConfiguration(env, language);
+    const { model, voice } = qwenConfiguration(env, language, options);
     const response = await post(`https://${workspace}.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer`, { Authorization: `Bearer ${key}` }, {
       model,
       input: { text, voice, format: 'wav', sample_rate: 24000, rate: options.rate ?? 0.85, ...(language === 'auto' ? {} : { language_hints: [language] }) },
@@ -163,28 +169,32 @@ export function createTtsMiddleware(env = process.env, request = fetch) {
       const text = data.text.trim();
       const identity = usage ? await usage.authorize(req, 'tts') : undefined;
       const provider = env.TTS_PROVIDER || 'qwen';
-      const model = provider === 'qwen' ? qwenConfiguration(env, data.language).model
-        : provider === 'minimax' ? env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo' : env.DOUBAO_TTS_RESOURCE_ID || 'seed-tts-2.0';
-      const voice = provider === 'qwen' ? qwenConfiguration(env, data.language).voice
-        : provider === 'minimax' ? env.MINIMAX_TTS_VOICE || 'female-shaonv' : env.DOUBAO_TTS_VOICE || 'zh_female_vv_uranus_bigtts';
-      const key = cache?.keyFor({ provider, model, voice, language: data.language || 'auto', text }) || `${provider}-${Buffer.from(text).toString('base64url').slice(0, 64)}`;
-      const cached = cache ? await cache.get(key) : undefined;
-      if (cached) {
-        if (usage) await usage.record(identity, { tts_requests: 1, tts_cache_hits: 1, tts_characters: text.length });
-        sendAudio(cached, cached.source, key);
-        return;
+      const configuration = provider === 'qwen' ? qwenConfiguration(env, data.language)
+        : provider === 'minimax' ? { model: env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo', voice: env.MINIMAX_TTS_VOICE || 'female-shaonv' }
+          : { model: env.DOUBAO_TTS_RESOURCE_ID || 'seed-tts-2.0', voice: env.DOUBAO_TTS_VOICE || 'zh_female_vv_uranus_bigtts' };
+      const key = cache?.keyFor({ provider, ...configuration, language: data.language || 'auto', text }) || `${provider}-${Buffer.from(text).toString('base64url').slice(0, 64)}`;
+      if (cache) {
+        const cached = await cache.get(key);
+        if (cached) {
+          if (usage) await usage.record(identity, { tts_requests: 1, tts_cache_hits: 1, tts_characters: text.length });
+          sendAudio(cached, cached.source, key);
+          return;
+        }
       }
       if (usage) await usage.assertGlobalBudget('tts');
-      const joined = inflight.has(key);
+      const inflightKey = key;
+      const joined = inflight.has(inflightKey);
       if (!joined) {
-        const promise = synthesize(text, data.language, env, request, controller.signal)
-          .then(async (audio) => { if (cache) await cache.put(key, audio); return audio; })
-          .finally(() => inflight.delete(key));
-        inflight.set(key, promise);
+        const promise = (async () => {
+          const audio = await synthesize(text, data.language, env, request, controller.signal, configuration);
+          if (cache) await cache.put(key, audio);
+          return { audio, key };
+        })().finally(() => inflight.delete(inflightKey));
+        inflight.set(inflightKey, promise);
       }
-      const audio = await inflight.get(key);
+      const result = await inflight.get(inflightKey);
       if (usage) await usage.record(identity, { tts_requests: 1, tts_upstream: joined ? 0 : 1, tts_cache_hits: joined ? 1 : 0, tts_characters: text.length, tts_upstream_characters: joined ? 0 : text.length });
-      sendAudio(audio, joined ? 'coalesced' : 'miss', key);
+      sendAudio(result.audio, joined ? 'coalesced' : 'miss', result.key);
     } catch (error) {
       sendError(error.status || (controller.signal.aborted ? 504 : 502), error instanceof ServiceError ? error.message : controller.signal.aborted ? '朗读超时，请稍后重试' : '语音服务暂时不可用，请检查网络或服务配置');
     } finally {

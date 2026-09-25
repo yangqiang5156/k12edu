@@ -16,6 +16,7 @@ describe('语音共享缓存', () => {
     const key = cache.keyFor(input);
     expect(cache.keyFor(input)).toBe(key);
     expect(cache.keyFor({ ...input, voice: 'voice-b' })).not.toBe(key);
+    expect(cache.keyFor({ ...input, rate: 1 })).not.toBe(key);
     expect(await cache.get(key)).toBeUndefined();
     await cache.put(key, { bytes: Buffer.from('wave'), type: 'audio/wav' });
     await expect(cache.get(key)).resolves.toMatchObject({ bytes: Buffer.from('wave'), type: 'audio/wav', source: 'local' });

@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 
 const stories = JSON.parse(await readFile(new URL('../src/data/stories.json', import.meta.url), 'utf8'));
 const base = new URL('../.cache/story-production/', import.meta.url).pathname;
-const audio = new URL('../public/stories/', import.meta.url).pathname;
+const audio = join(base, 'final');
 const originals = join(base, 'unnormalized');
 await mkdir(originals, { recursive: true });
 

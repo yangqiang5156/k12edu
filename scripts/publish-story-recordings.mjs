@@ -6,7 +6,7 @@ const stories = JSON.parse(await readFile(storiesUrl, 'utf8'));
 const drafts = JSON.parse(await readFile(new URL('../src/data/story-drafts.json', import.meta.url), 'utf8'));
 const partial = process.argv.includes('--partial');
 const cueDirectory = new URL('../.cache/story-production/cues/', import.meta.url).pathname;
-const audioDirectory = new URL('../public/stories/', import.meta.url).pathname;
+const audioDirectory = new URL('../.cache/story-production/final/', import.meta.url).pathname;
 if (stories.length !== 40 || drafts.length !== stories.length) throw new Error('故事数量应为 40 篇，且须与扩写稿一致');
 const cueManifest = JSON.parse(await readFile(new URL('../src/data/story-cues.json', import.meta.url), 'utf8'));
 const durations = JSON.parse(await readFile(new URL('../src/data/story-audio.json', import.meta.url), 'utf8'));

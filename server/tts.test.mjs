@@ -21,9 +21,9 @@ describe('三家在线语音协议', () => {
     expect(input.voice).toBe('Abby_v3.1');
     expect(input.language_hints).toEqual(['en']);
   });
-  it('切换到千问 3.1 时自动替换旧版不兼容音色', async () => {
+  it('千问中文朗读默认使用 3.1 兼容音色', async () => {
     const request = vi.fn().mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } })).mockResolvedValueOnce(new Response('wave'));
-    await synthesize('你好', 'zh', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test', QWEN_TTS_MODEL: 'qwen-audio-3.1-tts-flash', QWEN_TTS_VOICE: 'longanhuan_v3.6' }, request);
+    await synthesize('你好', 'zh', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request);
     expect(JSON.parse(request.mock.calls[0][1].body).input.voice).toBe('longanhuan_v3.1');
   });
   it('故事录音可以按学段设置语速，不改变课程朗读默认值', async () => {
@@ -39,6 +39,24 @@ describe('三家在线语音协议', () => {
     const result = await synthesize('你好', 'zh', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request);
     expect(request).toHaveBeenCalledTimes(3);
     expect(result.bytes.toString()).toBe('wave');
+  });
+  it('千问仅免费额度耗尽时返回可执行的中文提示', async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'AllocationQuota.FreeTierOnly', message: 'Free quota exhausted.' }), { status: 403 }));
+    await expect(synthesize('你好', 'zh', { QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request)).rejects.toMatchObject({
+      code: 'AllocationQuota.FreeTierOnly', status: 429, message: expect.stringContaining('仅使用免费额度')
+    });
+  });
+  it('课程朗读只调用千问3.1模型', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce(json({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } }))
+      .mockResolvedValueOnce(new Response('wave'));
+    const req = Readable.from([JSON.stringify({ text: '你好', language: 'zh' })]);
+    Object.assign(req, { url: '/api/tts', method: 'POST', headers: { 'content-type': 'application/json' } });
+    const res = Object.assign(new EventEmitter(), { destroyed: false, writeHead: vi.fn(), end: vi.fn() });
+    await createTtsMiddleware({ QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request)(req, res, vi.fn());
+    expect(JSON.parse(request.mock.calls[0][1].body).model).toBe('qwen-audio-3.1-tts-flash');
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(res.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
   });
   it('MiniMax 检查业务状态并解码十六进制音频', async () => {
     const request = vi.fn().mockResolvedValue(json({ base_resp: { status_code: 0 }, data: { audio: '494433' } }));

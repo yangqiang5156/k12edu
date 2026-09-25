@@ -14,10 +14,11 @@ export const DEFAULT_STORY_SETTINGS: StorySettings = {
 };
 
 export function storyAudioUrl(story: Story): string {
-  return `${import.meta.env.BASE_URL}stories/${story.id}-${story.audioVersion}.mp3`;
+  return story.audioUrl || `${import.meta.env.BASE_URL}api/stories/builtin/${story.id}-${story.audioVersion}.mp3`;
 }
 
 export function storyCues(story: Story): StoryCue[] {
+  if (story.cues?.length) return story.cues;
   const sheet = (rawCues as Record<string, StoryCueSheet>)[story.id];
   return sheet?.version === story.audioVersion ? sheet.cues : [];
 }
@@ -28,14 +29,14 @@ export function activeStoryCue(cues: StoryCue[], time: number): number {
   return index < 0 ? cues.length - 1 : index;
 }
 
-export function visibleStories(settings: StorySettings): Story[] {
-  return STORIES.filter(story => !settings.hiddenStoryIds.includes(story.id)
+export function visibleStories(settings: StorySettings, stories: Story[] = STORIES): Story[] {
+  return stories.filter(story => !settings.hiddenStoryIds.includes(story.id)
     && !story.themes.some(theme => settings.hiddenThemes.includes(theme)));
 }
 
-export function recommendedStories(settings: StorySettings, age: number, progress: StoryProgress[]): Story[] {
+export function recommendedStories(settings: StorySettings, age: number, progress: StoryProgress[], stories: Story[] = STORIES): Story[] {
   const completed = new Set(progress.filter(item => item.completedAt).map(item => item.id));
-  return visibleStories(settings).filter(story => story.ageMin <= age && age <= story.ageMax)
+  return visibleStories(settings, stories).filter(story => story.ageMin <= age && age <= story.ageMax)
     .sort((a, b) => Number(completed.has(a.id)) - Number(completed.has(b.id)) || a.id.localeCompare(b.id));
 }
 

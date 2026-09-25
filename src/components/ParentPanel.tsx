@@ -9,6 +9,7 @@ import { learnedContentIds as collectLearnedContentIds } from '../learning-histo
 import { CloudAccountPanel } from './CloudAccountPanel';
 import { DEFAULT_STORY_SETTINGS, STORIES, STORY_THEMES } from '../stories';
 import type { StoryTheme } from '../story-types';
+import { FamilyStoryManager } from './FamilyStoryManager';
 
 interface Props {
   data: AppData;
@@ -29,7 +30,7 @@ interface Props {
 }
 
 const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六'];
-type Tab = 'overview' | 'settings' | 'history' | 'rewards' | 'data' | 'account';
+type Tab = 'overview' | 'settings' | 'history' | 'stories' | 'rewards' | 'data' | 'account';
 
 export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption, onSaveReward, onAdjustWallet, onRemoveTaskItem, onAddLibraryTask, onSaveContent, onDeleteContent, onExport, onImportBackup, onImportContent, onClear, onRestoreCloud }: Props) {
   const [tab, setTab] = useState<Tab>('overview');
@@ -74,7 +75,7 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
         <div><span className="eyebrow">家长中心</span><h1>{draft.childName}的成长看板</h1></div>
       </header>
       <nav className="parent-tabs">
-        {([['overview', '看板'], ['settings', '任务'], ['history', '历史'], ['rewards', '奖励'], ['data', '数据'], ['account', '账号']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
+        {([['overview', '看板'], ['settings', '任务'], ['history', '历史'], ['stories', '故事'], ['rewards', '奖励'], ['data', '数据'], ['account', '账号']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
       </nav>
 
       {tab === 'overview' && <main className="parent-body">
@@ -157,6 +158,8 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
       </main>}
 
       {tab === 'history' && <><LearningHistory events={data.learningEvents ?? []} plans={data.plans} completions={data.completions} totalContent={data.content.length} /><main className="parent-body"><section className="parent-card"><h2>故事收听</h2><p>近 7 天有效收听 {Math.round(recentStorySeconds / 60)} 分钟 · 已听过 {(data.storyProgress ?? []).filter(item => item.positionSeconds > 0).length} 篇</p>{storyEvents.slice(0, 20).map(event => <div className="report-row" key={event.id}><span>{event.date} · {event.title}</span><strong>{Math.round(event.listenedSeconds / 60)} 分钟{event.completed ? ' ✓' : ''}</strong></div>)}{!storyEvents.length && <p>还没有故事收听记录。</p>}</section></main></>}
+
+      {tab === 'stories' && <FamilyStoryManager childName={draft.childName} childAge={draft.childAge ?? 4} />}
 
       {tab === 'rewards' && <main className="parent-body">
         {pending.length > 0 && <section className="parent-card pending-card"><h2>待确认兑换</h2>{pending.map((item) => <div className="pending-row" key={item.id}><span>{item.rewardTitle}</span><div><button onClick={() => onResolveRedemption(item, false)}>拒绝</button><button className="approve" onClick={() => onResolveRedemption(item, true)}>同意</button></div></div>)}</section>}

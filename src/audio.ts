@@ -18,6 +18,8 @@ export function playClick(enabled: boolean): void {
 
 let cancelCurrent: (() => void) | undefined;
 
+class SpeechQuotaError extends Error {}
+
 async function audioCacheKey(text: string, language: string) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ version: 1, text, language })));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
@@ -37,6 +39,7 @@ async function speechBlob(text: string, language: string, signal: AbortSignal): 
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
+    if (response.status === 429 && /额度|免费语音/.test(error.error || '')) throw new SpeechQuotaError(error.error);
     throw new Error(error.error || '语音服务暂时不可用，请稍后再试');
   }
   const blob = await response.blob();
@@ -68,19 +71,40 @@ async function runSpeech(segments: string[], enabled: boolean, language: string,
   const cancel = () => {
     controller.abort();
     activeAudio?.pause();
+    globalThis.speechSynthesis?.cancel();
     rejectPlayback?.(abortError());
     rejectPause?.(abortError());
     if (pauseTimer !== undefined) globalThis.clearTimeout(pauseTimer);
   };
   cancelCurrent = cancel;
   try {
-    const urls = await Promise.all(parts.map(async (text) => {
-      const blob = await speechBlob(text, language, controller.signal);
-      controller.signal.throwIfAborted();
-      const url = URL.createObjectURL(blob);
-      objectUrls.push(url);
-      return url;
-    }));
+    let urls: string[];
+    try {
+      urls = await Promise.all(parts.map(async (text) => {
+        const blob = await speechBlob(text, language, controller.signal);
+        controller.signal.throwIfAborted();
+        const url = URL.createObjectURL(blob);
+        objectUrls.push(url);
+        return url;
+      }));
+    } catch (error) {
+      if (!(error instanceof SpeechQuotaError) || !globalThis.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') throw error;
+      for (const [index, text] of parts.entries()) {
+        controller.signal.throwIfAborted();
+        await new Promise<void>((resolve, reject) => {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = language === 'en' ? 'en-US' : 'zh-CN'; utterance.rate = 0.85;
+          utterance.onend = () => resolve(); utterance.onerror = event => reject(new Error(event.error === 'canceled' ? '朗读已取消' : '设备朗读失败'));
+          controller.signal.addEventListener('abort', () => { globalThis.speechSynthesis.cancel(); reject(abortError()); }, { once: true });
+          globalThis.speechSynthesis.speak(utterance);
+        });
+        if (index < parts.length - 1) await new Promise<void>((resolve, reject) => {
+          rejectPause = reject;
+          pauseTimer = globalThis.setTimeout(() => { pauseTimer = undefined; rejectPause = undefined; resolve(); }, Math.max(1000, pauseMs));
+        });
+      }
+      return;
+    }
 
     for (const [index, url] of urls.entries()) {
       controller.signal.throwIfAborted();

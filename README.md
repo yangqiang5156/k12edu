@@ -104,8 +104,12 @@ docker run --rm --env-file .env -e PORT=80 -p 8080:80 lexue:local
 
 生产环境使用 Node.js 22.16+，运行 `pnpm build` 后用 `pnpm start` 启动（默认端口 80；示例配置为 8080）。Docker 已包含 Node 服务。纯静态 ZIP 不包含语音服务。
 
-## 故事屋（本地试用版）
+## 故事屋
 
 首页「故事时间」可进入故事屋，收听 40 篇分龄故事，其中幼儿园阶段 20 篇。支持筛选、播放进度、续听、收藏、倍速、睡眠定时和家长时长设置。达到每日上限时，当前故事可听完，随后停止。故事进度和收听记录进入本地及家庭云备份，故事正文和 MP3 不进入家庭快照。
 
-40 篇长版扩写稿保存在 `src/data/story-drafts.json`，均已生成分龄长版 MP3 与逐句时间点。播放、拖动、续听和倍速时，正在朗读的句子会高亮。前 3 篇沿用已完成的千问 3.0 录音；其余 37 篇使用千问 3.1 及对应音色完成，没有修改账号付费保护。6 篇短于目标下限的成片做了安全范围内的保音高变速，并同步校正时间点，原始文件留在忽略的本地制作缓存中。重新制作可运行 `node --env-file=.env scripts/build-story-audio.mjs`，随后运行 `node scripts/normalize-story-audio.mjs` 与 `node scripts/publish-story-recordings.mjs` 校验后发布。正式对外发布前还需逐篇试听并完成内容、事实和版权审核。方案与待完成项见 [故事屋 MVP 产品方案](docs/故事屋MVP产品方案.md)。
+40 篇内置故事音频存放在阿里云 OSS 的 `lexue/stories/builtin/`，应用包仅保留故事文字、时长和逐句时间点。播放、拖动、续听和倍速时，正在朗读的句子会高亮。
+
+家长登录后可在“家长中心 → 故事”输入主题，通过 DeepSeek 生成原创故事草稿。草稿不会自动发布；家长检查并保存后可启动后台配音，系统逐句使用已配置的 TTS 模型生成音频、合并 MP3、记录高亮时间点，并保存到 `lexue/stories/families/<family-id>/` 私有目录。家长试听并手动发布后，对应孩子才能在故事屋看到。
+
+重新制作内置音频可运行 `node --env-file=.env scripts/build-story-audio.mjs`，随后运行标准化、发布校验与 `pnpm stories:upload`。音频制作文件保存在忽略的 `.cache/story-production/`，不会重新进入应用包。方案与内容规则见 [故事屋 MVP 产品方案](docs/故事屋MVP产品方案.md)。

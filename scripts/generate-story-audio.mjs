@@ -7,7 +7,7 @@ const stories = JSON.parse(await readFile(new URL('../src/data/stories.json', im
 if (stories.some(story => story.audioVersion !== 'v1')) {
   throw new Error('检测到已发布的千问长版故事。此旧版系统语音脚本不得覆盖长版录音，请使用 build-story-audio.mjs。');
 }
-const output = new URL('../public/stories/', import.meta.url);
+const output = new URL('../.cache/story-production/final/', import.meta.url);
 await mkdir(output, { recursive: true });
 
 function command(file, args) {

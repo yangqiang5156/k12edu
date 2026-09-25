@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
 const stories = JSON.parse(await readFile(new URL('../src/data/stories.json', import.meta.url), 'utf8'));
-const audioDir = new URL('../public/stories/', import.meta.url).pathname;
+const audioDir = new URL('../.cache/story-production/final/', import.meta.url).pathname;
 
 function duration(path) {
   return new Promise((resolve, reject) => {

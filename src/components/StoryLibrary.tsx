@@ -3,6 +3,7 @@ import { localDateKey } from '../logic';
 import { activeStoryCue, DEFAULT_STORY_SETTINGS, heardCoverage, listenedToday, mergeHeardRange, recommendedStories, STORIES, STORY_STAGES, STORY_THEMES, storyAudioUrl, storyCues, visibleStories } from '../stories';
 import type { Story, StoryListenEvent, StoryProgress, StoryStage, StoryTheme } from '../story-types';
 import type { AppData } from '../types';
+import { loadFamilyStories } from '../family-stories';
 
 interface Props {
   data: AppData;
@@ -180,13 +181,16 @@ export function StoryLibrary({ data, initialStoryId, onSave, onClose, onOpenStor
   const settings = { ...DEFAULT_STORY_SETTINGS, ...data.settings.storySettings };
   const age = data.settings.childAge ?? 4;
   const progress = data.storyProgress ?? [];
-  const stories = visibleStories(settings);
-  const recommended = recommendedStories(settings, age, progress);
+  const [familyStories, setFamilyStories] = useState<Story[]>([]);
+  useEffect(() => { void loadFamilyStories(true).then(setFamilyStories).catch(() => setFamilyStories([])); }, []);
+  const allStories = useMemo(() => [...STORIES, ...familyStories], [familyStories]);
+  const stories = visibleStories(settings, allStories);
+  const recommended = recommendedStories(settings, age, progress, allStories);
   const [stage, setStage] = useState<StoryStage | 'all'>('all');
   const [theme, setTheme] = useState<StoryTheme | 'all'>('all');
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [lengthFilter, setLengthFilter] = useState<'all' | 'short' | 'long'>('all');
-  const currentStory = STORIES.find(story => story.id === initialStoryId && stories.some(visible => visible.id === story.id));
+  const currentStory = allStories.find(story => story.id === initialStoryId && stories.some(visible => visible.id === story.id));
   const listened = listenedToday(data.storyListenEvents ?? [], localDateKey());
   const limitReached = settings.dailyLimitMinutes > 0 && listened >= settings.dailyLimitMinutes * 60;
   const admitted = useRef(new Set<string>());

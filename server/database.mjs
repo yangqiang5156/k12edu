@@ -97,12 +97,61 @@ CREATE TABLE IF NOT EXISTS system_alerts (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS family_stories (
+  id uuid PRIMARY KEY,
+  family_id uuid NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  child_id uuid NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  created_by uuid REFERENCES parent_users(id) ON DELETE SET NULL,
+  title text NOT NULL,
+  summary text NOT NULL,
+  stage text NOT NULL CHECK (stage IN ('kindergarten', 'primary-lower', 'primary-upper')),
+  age_min smallint NOT NULL CHECK (age_min BETWEEN 3 AND 12),
+  age_max smallint NOT NULL CHECK (age_max BETWEEN 3 AND 12),
+  themes text[] NOT NULL DEFAULT '{}',
+  paragraphs jsonb NOT NULL,
+  duration_minutes smallint NOT NULL DEFAULT 5 CHECK (duration_minutes IN (3,5,8)),
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','audio_queued','audio_generating','ready','published','failed','archived')),
+  content_version text NOT NULL,
+  audio_version text,
+  audio_object_key text,
+  audio_duration_seconds integer,
+  audio_model text,
+  audio_voice text,
+  cues jsonb,
+  error_message text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  published_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS story_audio_jobs (
+  id uuid PRIMARY KEY,
+  story_id uuid NOT NULL UNIQUE REFERENCES family_stories(id) ON DELETE CASCADE,
+  family_id uuid NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  requested_by uuid REFERENCES parent_users(id) ON DELETE SET NULL,
+  device_id text REFERENCES devices(id) ON DELETE SET NULL,
+  status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','processing','completed','failed')),
+  completed_sentences integer NOT NULL DEFAULT 0,
+  total_sentences integer NOT NULL DEFAULT 0,
+  last_error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS story_generation_daily (
+  usage_date date NOT NULL DEFAULT current_date,
+  family_id uuid NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  generations integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (usage_date, family_id)
+);
 ALTER TABLE usage_daily ADD COLUMN IF NOT EXISTS tts_upstream_characters bigint NOT NULL DEFAULT 0;
 ALTER TABLE global_usage_daily ADD COLUMN IF NOT EXISTS tts_upstream_characters bigint NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_children_family ON children(family_id);
 CREATE INDEX IF NOT EXISTS idx_devices_family ON devices(family_id);
 CREATE INDEX IF NOT EXISTS idx_usage_family_date ON usage_daily(family_id, usage_date DESC);
 CREATE INDEX IF NOT EXISTS idx_content_packs_status ON published_content_packs(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_family_stories_family ON family_stories(family_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_family_stories_child_status ON family_stories(child_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_story_audio_jobs_status ON story_audio_jobs(status, updated_at);
 `;
 
 export function createDatabase(env = process.env) {

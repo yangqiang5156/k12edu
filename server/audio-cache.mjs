@@ -19,7 +19,7 @@ export function createAudioCache(env = process.env) {
     internal: env.OSS_INTERNAL === 'true',
   }) : undefined;
 
-  const keyFor = ({ provider, model, voice, language, text }) => hash(JSON.stringify({ version: 1, provider, model, voice, language, rate: 0.85, text: text.trim() }));
+  const keyFor = ({ provider, model, voice, language, text, rate = 0.85 }) => hash(JSON.stringify({ version: 1, provider, model, voice, language, rate, text: text.trim() }));
   const paths = (key) => ({ local: join(directory, key.slice(0, 2), `${key}.audio`), object: `${prefix}${key}.audio` });
 
   const get = async (key) => {

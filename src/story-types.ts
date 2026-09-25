@@ -13,6 +13,32 @@ export interface Story {
   paragraphs: string[];
   audioVersion: string;
   durationSeconds: number;
+  cues?: StoryCue[];
+  audioUrl?: string;
+  source?: 'builtin' | 'family';
+  status?: FamilyStoryStatus;
+  durationMinutes?: 3 | 5 | 8;
+  audioModel?: string;
+  audioVoice?: string;
+  errorMessage?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  publishedAt?: string;
+}
+
+export type FamilyStoryStatus = 'draft' | 'audio_queued' | 'audio_generating' | 'ready' | 'published' | 'failed' | 'archived';
+
+export interface StoryDraft {
+  id?: string;
+  childId: string;
+  title: string;
+  summary: string;
+  stage: StoryStage;
+  ageMin: number;
+  ageMax: number;
+  themes: StoryTheme[];
+  paragraphs: string[];
+  durationMinutes: 3 | 5 | 8;
 }
 
 export interface StoryCue {
