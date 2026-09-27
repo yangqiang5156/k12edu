@@ -20,7 +20,8 @@ export function contentErrors(value: unknown): string[] {
   if (!string(value.id) || !string(value.title)) errors.push('缺少 id 或资料名称');
   if (!moduleId(value.module)) errors.push('module 无效');
   else if (!kinds[value.module as string].includes(String(value.kind))) errors.push('资料类型与模块不匹配');
-  for (const key of ['subtitle', 'body', 'prompt', 'answer']) if (!optional(value[key], v => typeof v === 'string')) errors.push(`${key} 必须是文本`);
+  for (const key of ['subtitle', 'exampleWord', 'body', 'prompt', 'answer']) if (!optional(value[key], v => typeof v === 'string')) errors.push(`${key} 必须是文本`);
+  if (value.exampleWord && value.kind === 'character' && !String(value.exampleWord).includes(String(value.title))) errors.push('组词必须包含该汉字');
   for (const key of ['ageMin', 'ageMax']) if (!optional(value[key], v => integer(v, 3, 12))) errors.push(`${key} 应为3到12的整数`);
   if (typeof value.ageMin === 'number' && typeof value.ageMax === 'number' && value.ageMin > value.ageMax) errors.push('适合年龄范围无效');
   // 字母等内置内容历史上使用 stage=0；数学阶段仍严格限定为 1–6。
@@ -88,6 +89,7 @@ export function validateBackup(value: unknown): { ok: true; backup: BackupEnvelo
     if (!validateSettings(d.settings)) throw new Error('学习设置格式无效');
     if (!unique(d.content, 'id', item => backupContentErrors(item).length === 0)) throw new Error('内容库包含无效内容或重复 ID');
     const dailyItem = (item: Record<string, unknown>) => string(item.contentId) && string(item.title)
+      && optional(item.exampleWord, string)
       && Object.values(kinds).flat().includes(String(item.kind))
       && ['detail', 'prompt', 'answer'].every(key => optional(item[key], v => typeof v === 'string'))
       && optional(item.isReview, v => typeof v === 'boolean')

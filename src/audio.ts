@@ -55,9 +55,11 @@ export function stopSpeech(): void {
   cancelCurrent = undefined;
 }
 
-async function runSpeech(segments: string[], enabled: boolean, language: string, pauseMs: number): Promise<void> {
+export interface SpeechSegment { text: string; language: 'auto' | 'zh' | 'en' }
+
+async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: number): Promise<void> {
   stopSpeech();
-  const parts = segments.map((part) => part.trim()).filter(Boolean);
+  const parts = segments.map((part) => ({ ...part, text: part.text.trim() })).filter(part => Boolean(part.text));
   if (!enabled || !parts.length) return;
   const controller = new AbortController();
   // iOS 会把每个新的 Audio 元素视为一次新的播放请求。整次朗读只创建
@@ -80,7 +82,7 @@ async function runSpeech(segments: string[], enabled: boolean, language: string,
   try {
     let urls: string[];
     try {
-      urls = await Promise.all(parts.map(async (text) => {
+      urls = await Promise.all(parts.map(async ({ text, language }) => {
         const blob = await speechBlob(text, language, controller.signal);
         controller.signal.throwIfAborted();
         const url = URL.createObjectURL(blob);
@@ -89,7 +91,7 @@ async function runSpeech(segments: string[], enabled: boolean, language: string,
       }));
     } catch (error) {
       if (!(error instanceof SpeechQuotaError) || !globalThis.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') throw error;
-      for (const [index, text] of parts.entries()) {
+      for (const [index, { text, language }] of parts.entries()) {
         controller.signal.throwIfAborted();
         await new Promise<void>((resolve, reject) => {
           const utterance = new SpeechSynthesisUtterance(text);
@@ -142,12 +144,16 @@ async function runSpeech(segments: string[], enabled: boolean, language: string,
   }
 }
 
-export async function speak(text: string, enabled: boolean, language = 'auto'): Promise<void> {
-  return runSpeech([text], enabled, language, 0);
+export async function speak(text: string, enabled: boolean, language: SpeechSegment['language'] = 'auto'): Promise<void> {
+  return runSpeech([{ text, language }], enabled, 0);
 }
 
-export async function speakSequence(segments: string[], enabled: boolean, language = 'auto', pauseMs = 1000): Promise<void> {
-  return runSpeech(segments, enabled, language, pauseMs);
+export async function speakSequence(segments: string[], enabled: boolean, language: SpeechSegment['language'] = 'auto', pauseMs = 1000): Promise<void> {
+  return runSpeech(segments.map(text => ({ text, language })), enabled, pauseMs);
+}
+
+export async function speakMultilingualSequence(segments: SpeechSegment[], enabled: boolean, pauseMs = 1000): Promise<void> {
+  return runSpeech(segments, enabled, pauseMs);
 }
 
 export function speechError(error: unknown): string {

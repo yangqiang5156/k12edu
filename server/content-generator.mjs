@@ -40,7 +40,7 @@ export function validateGeneratedContent(raw, now = Date.now()) {
     ageMax,
     source: 'imported',
   };
-  for (const [key, maxLength] of [['subtitle', 200], ['body', 6000], ['prompt', 1000], ['answer', 500]]) {
+  for (const [key, maxLength] of [['subtitle', 200], ['exampleWord', 20], ['body', 6000], ['prompt', 1000], ['answer', 500]]) {
     const value = text(raw[key], maxLength);
     if (value) item[key] = value;
   }
@@ -62,6 +62,9 @@ export function validateGeneratedContent(raw, now = Date.now()) {
   if (['poem', 'classic', 'character', 'letter', 'word', 'reader', 'science'].includes(kind) && !item.body) {
     throw new ContentGenerationError('大模型没有填写正文或讲解');
   }
+  if (kind === 'character' && (!item.exampleWord || !item.exampleWord.includes(title))) {
+    throw new ContentGenerationError('汉字资料需要一个包含该字的常用组词');
+  }
   if (kind === 'math-choice') {
     if (!item.prompt || !item.answer || !item.options || item.options.length < 2) throw new ContentGenerationError('数学选择题缺少题目、选项或答案');
     if (new Set(item.options).size !== item.options.length) throw new ContentGenerationError('数学选择题包含重复选项');
@@ -73,14 +76,14 @@ export function validateGeneratedContent(raw, now = Date.now()) {
 
 const SYSTEM_PROMPT = `你是面向 3–12 岁儿童的严谨课程资料编辑。把家长的一句话转换成一条完整资料，并且只输出 json 对象。
 可用 module/kind 组合：guoxue=poem|classic；literacy=character；math=math-choice；english=letter|word|reader；writing=trace；science=science。
-必须输出这些键：module,kind,title,subtitle,body,prompt,options,answer,stage,ageMin,ageMax,tags,url。无适用内容使用 null，options/tags 使用数组。
+必须输出这些键：module,kind,title,subtitle,exampleWord,body,prompt,options,answer,stage,ageMin,ageMax,tags,url。无适用内容使用 null，options/tags 使用数组。
 质量规则：
 1. 根据用户意图自动选择模块和类型，内容准确、适龄、措辞清楚，不能虚构作者、原文、答案、事实或链接。
 2. title、ageMin、ageMax、tags 必填；年龄只能是 3–12 的整数。
-3. poem/classic 必须有准确作者或出处 subtitle 和完整 body；character 必须有拼音 subtitle 和组词/讲解 body；letter/word 必须有发音或大小写提示 subtitle 和中文讲解 body；reader 必须有来源说明 subtitle 和原创/授权内容简介 body；trace 必须有描写提示 subtitle；science 必须有安全、可执行的步骤 body。
+3. poem/classic 必须有准确作者或出处 subtitle 和完整 body；character 必须有拼音 subtitle、包含该字的常用组词 exampleWord 和讲解 body；letter/word 必须有发音或大小写提示 subtitle 和中文讲解 body；reader 必须有来源说明 subtitle 和原创/授权内容简介 body；trace 必须有描写提示 subtitle；science 必须有安全、可执行的步骤 body。
 4. math-choice 必须有 prompt、2–6 个互不重复的 options、与某个选项完全一致的 answer，以及 1–6 的 stage；自行复算后再输出。
 5. 只有用户原话明确给出正版 http/https 链接时才能填写 url，否则必须为 null。不要声称模型生成内容已经经过权威来源核验。
-JSON 示例：{"module":"math","kind":"math-choice","title":"5以内加法","subtitle":null,"body":null,"prompt":"桌上有2个苹果，又放来1个，一共有几个？","options":["2","3","4"],"answer":"3","stage":1,"ageMin":4,"ageMax":5,"tags":["数学","加法"],"url":null}`;
+JSON 示例：{"module":"math","kind":"math-choice","title":"5以内加法","subtitle":null,"exampleWord":null,"body":null,"prompt":"桌上有2个苹果，又放来1个，一共有几个？","options":["2","3","4"],"answer":"3","stage":1,"ageMin":4,"ageMax":5,"tags":["数学","加法"],"url":null}`;
 
 async function requestCompletion(prompt, feedback, env, request, signal, onUsage) {
   const apiKey = env.DEEPSEEK_API_KEY?.trim();

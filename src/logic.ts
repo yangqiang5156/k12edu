@@ -13,7 +13,7 @@ import type {
 } from './types';
 
 export const REVIEW_INTERVALS = [1, 3, 7, 14, 30];
-export const DAILY_PLAN_CURRICULUM_VERSION = 4;
+export const DAILY_PLAN_CURRICULUM_VERSION = 6;
 
 export function localDateKey(date = new Date()): string {
   const year = date.getFullYear();
@@ -55,6 +55,7 @@ function toDailyItem(item: ContentItem, date: string, suffix = '', isReview = fa
     contentId: item.id,
     title: item.title,
     detail: [item.subtitle, item.body].filter(Boolean).join('\n'),
+    exampleWord: item.exampleWord,
     kind: item.kind,
     prompt: item.prompt,
     answer: item.answer,
@@ -80,6 +81,34 @@ function moduleTask(date: string, module: ModuleId, newItems: ContentItem[], rev
     ],
     doneItemIds: []
   };
+}
+
+export function alignWritingWithLiteracy(date: string, modules: DailyModuleTask[], content: ContentItem[]): DailyModuleTask[] {
+  const literacy = modules.find(task => task.module === 'literacy');
+  if (!literacy || !modules.some(task => task.module === 'writing')) return modules;
+  const traces = new Map(content.filter(item => item.module === 'writing' && item.kind === 'trace').map(item => [item.title, item]));
+  const items: DailyItem[] = literacy.items.map((character, index) => ({
+    id: `${date}-writing-${character.contentId}-${index}`,
+    contentId: traces.get(character.title)?.id ?? `trace-for-${character.contentId}`,
+    title: character.title,
+    detail: '沿着浅色笔画慢慢描',
+    kind: 'trace',
+    isReview: character.isReview
+  }));
+  const newCount = items.filter(item => !item.isReview).length;
+  const reviewCount = items.length - newCount;
+  const title = ['慢慢描一描', newCount ? `${newCount}个新内容` : '', reviewCount ? `${reviewCount}个记忆复习` : ''].filter(Boolean).join(' · ');
+  return modules.map(task => task.module === 'writing' ? { ...task, title, items } : task);
+}
+
+export function enrichCharacterWords(modules: DailyModuleTask[], content: ContentItem[]): DailyModuleTask[] {
+  const words = new Map(content.filter(item => item.kind === 'character' && item.exampleWord).map(item => [item.id, item.exampleWord]));
+  return modules.map(task => {
+    if (task.module !== 'literacy') return task;
+    const items = task.items.map(item => item.exampleWord || !words.has(item.contentId)
+      ? item : { ...item, exampleWord: words.get(item.contentId) });
+    return items.every((item, index) => item === task.items[index]) ? task : { ...task, items };
+  });
 }
 
 interface ContentLearningHistory {
@@ -202,7 +231,11 @@ export function generateDailyPlan(
     if (newItems.length || reviews.length) modules.push(moduleTask(date, module, newItems, reviews, prefix));
   }
 
-  return { date, generatedAt: new Date().toISOString(), curriculumVersion: DAILY_PLAN_CURRICULUM_VERSION, isActiveDay, modules };
+  if (modules.some(task => task.module === 'literacy') && enabled.has('writing') && !modules.some(task => task.module === 'writing')) {
+    const position = modules.filter(task => settings.enabledModules.indexOf(task.module) < settings.enabledModules.indexOf('writing')).length;
+    modules.splice(position, 0, { id: `${date}-writing`, module: 'writing', title: '', items: [], doneItemIds: [] });
+  }
+  return { date, generatedAt: new Date().toISOString(), curriculumVersion: DAILY_PLAN_CURRICULUM_VERSION, isActiveDay, modules: alignWritingWithLiteracy(date, modules, content) };
 }
 
 export function regenerateDailyPlanForSettings(
@@ -232,6 +265,11 @@ export function regenerateDailyPlanForSettings(
     if (!schedulingChanged || previous.collectedAt || previous.doneItemIds.length) return previous;
     return module;
   });
+  freshPlan.modules = enrichCharacterWords(freshPlan.modules, content);
+  const writing = freshPlan.modules.find(module => module.module === 'writing');
+  if (writing && !writing.collectedAt && !writing.doneItemIds.length) {
+    freshPlan.modules = alignWritingWithLiteracy(date, freshPlan.modules, content);
+  }
   if (freshPlan.modules.length > 0 && freshPlan.modules.every((module) => module.collectedAt)) {
     freshPlan.completedAt = existingPlan.completedAt;
   }

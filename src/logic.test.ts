@@ -6,7 +6,7 @@ import {
   moduleRewards, numberSpeechText, numberToChinese, numberToEnglish, petLevel, rewardBalanceAdjustmentEntries, rewardEntriesForCompletion,
   regenerateDailyPlanForSettings, shouldGrantAttendanceBonus, unlockedClassicCount, validateBackup, validateContentPack, weekStartKey
 } from './logic';
-import type { CompletionEvent, DailyPlan, ParentSettings, RewardLedgerEntry } from './types';
+import type { CompletionEvent, ContentItem, DailyPlan, ParentSettings, RewardLedgerEntry } from './types';
 
 const completion = (id: string, module: CompletionEvent['module'] = 'guoxue'): CompletionEvent => ({
   id, date: '2026-08-10', module, taskId: id, completedAt: '2026-08-10T08:00:00.000Z', contentIds: [id]
@@ -20,6 +20,28 @@ describe('每日排课', () => {
     expect(plan.modules.find((task) => task.module === 'english')?.items.map((item) => item.contentId)).toEqual(['letter-a', 'letter-b']);
     expect(plan.modules.find((task) => task.module === 'english')?.title).toContain('0/26');
     expect(plan.modules.find((task) => task.module === 'literacy')?.items).toHaveLength(2);
+    expect(plan.modules.find((task) => task.module === 'writing')?.items.map(item => item.title))
+      .toEqual(plan.modules.find((task) => task.module === 'literacy')?.items.map(item => item.title));
+  });
+
+  it('控笔同步识字的新字、复习字，也支持没有对应描红内容的自定义字', () => {
+    const settings: ParentSettings = { ...DEFAULT_SETTINGS, enabledModules: ['writing', 'literacy'], dailyContentCounts: { literacy: 2, writing: 4 } };
+    const custom: ContentItem = { id: 'parent-char', module: 'literacy', kind: 'character', title: '麒', source: 'imported' };
+    const content = [custom, ...BUILTIN_CONTENT];
+    const learned: CompletionEvent = { id: 'learned', date: '2026-08-10', module: 'literacy', taskId: 'learned', completedAt: '2026-08-10T08:00:00.000Z', contentIds: ['char-1'] };
+    const plan = generateDailyPlan('2026-08-11', settings, content, [learned]);
+    const literacy = plan.modules.find(task => task.module === 'literacy')!;
+    const writing = plan.modules.find(task => task.module === 'writing')!;
+    expect(writing.items.map(item => [item.title, item.isReview])).toEqual(literacy.items.map(item => [item.title, item.isReview]));
+    expect(writing.items.every(item => item.kind === 'trace')).toBe(true);
+    expect(writing.items).toHaveLength(literacy.items.length);
+    const customPlan = generateDailyPlan('2026-08-11', { ...settings, dailyContentCounts: { literacy: 1 } }, [custom], []);
+    expect(customPlan.modules.find(task => task.module === 'writing')?.items[0].contentId).toBe('trace-for-parent-char');
+  });
+
+  it('识字关闭时控笔仍按自身内容排课', () => {
+    const settings: ParentSettings = { ...DEFAULT_SETTINGS, enabledModules: ['writing'], dailyContentCounts: { writing: 4 } };
+    expect(generateDailyPlan('2026-08-10', settings, BUILTIN_CONTENT, []).modules[0].items).toHaveLength(4);
   });
 
   it('认识全部字母后进入单词与每周三本绘本排课', () => {
@@ -77,7 +99,21 @@ describe('每日排课', () => {
     const settings = { ...DEFAULT_SETTINGS, dailyContentCounts: { ...DEFAULT_SETTINGS.dailyContentCounts, literacy: 3, science: 2 } };
     const updatedPlan = regenerateDailyPlanForSettings(date, settings, BUILTIN_CONTENT, [], existingPlan, DEFAULT_SETTINGS);
     expect(updatedPlan.modules.find((task) => task.module === 'literacy')?.items).toHaveLength(3);
+    expect(updatedPlan.modules.find((task) => task.module === 'writing')?.items.map(item => item.title))
+      .toEqual(updatedPlan.modules.find((task) => task.module === 'literacy')?.items.map(item => item.title));
     expect(updatedPlan.modules.find((task) => task.module === 'science')?.items).toHaveLength(2);
+  });
+
+  it('已开始的识字任务保留进度并补上新组词', () => {
+    const date = '2026-08-10';
+    const existing = generateDailyPlan(date, DEFAULT_SETTINGS, BUILTIN_CONTENT, []);
+    const literacy = existing.modules.find(task => task.module === 'literacy')!;
+    literacy.items = literacy.items.map(item => ({ ...item, exampleWord: undefined }));
+    literacy.doneItemIds = [literacy.items[0].id];
+    const updated = regenerateDailyPlanForSettings(date, DEFAULT_SETTINGS, BUILTIN_CONTENT, [], existing);
+    const updatedLiteracy = updated.modules.find(task => task.module === 'literacy')!;
+    expect(updatedLiteracy.doneItemIds).toEqual(literacy.doneItemIds);
+    expect(updatedLiteracy.items.every(item => item.exampleWord?.includes(item.title))).toBe(true);
   });
 
   it('按第1、3、7、14、30天加入已学内容并标记为记忆复习', () => {

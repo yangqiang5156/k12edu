@@ -29,7 +29,7 @@ describe('逐条学习与恢复', () => {
     original.curriculumVersion = 1;
     original.modules[0].doneItemIds = [original.modules[0].items[0].id];
     const prepared = ensureTodayPlan(data, date);
-    expect(prepared.plans[0].curriculumVersion).toBe(4);
+    expect(prepared.plans[0].curriculumVersion).toBe(6);
     expect(prepared.plans[0].modules[0]).toBe(original.modules[0]);
   });
   it('答错保存但不发奖，重试正确保留首次错误和提示表现', () => {

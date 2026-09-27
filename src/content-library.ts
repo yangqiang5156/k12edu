@@ -75,13 +75,13 @@ export function filterContentLibrary(items: ContentItem[], module: ModuleId | 'a
   const keyword = query.trim().toLowerCase();
   return items.filter((item) => (module === 'all' || item.module === module)
     && (age === 'all' || ((item.ageMin ?? 0) <= age && (item.ageMax ?? 99) >= age)) && (!keyword || [
-    item.id, item.title, item.subtitle, item.body, item.prompt, item.answer, item.options?.join(' '), item.tags?.join(' ')
+    item.id, item.title, item.subtitle, item.exampleWord, item.body, item.prompt, item.answer, item.options?.join(' '), item.tags?.join(' ')
   ].filter(Boolean).join(' ').toLowerCase().includes(keyword)));
 }
 
 export function normalizeContentItem(item: ContentItem): ContentItem {
   const result: ContentItem = { ...item, title: item.title.trim() };
-  for (const key of ['subtitle', 'body', 'prompt', 'answer', 'url'] as const) {
+  for (const key of ['subtitle', 'exampleWord', 'body', 'prompt', 'answer', 'url'] as const) {
     const value = result[key]?.trim();
     if (value) result[key] = value;
     else delete result[key];

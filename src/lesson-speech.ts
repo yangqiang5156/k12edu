@@ -1,10 +1,12 @@
 import type { DailyItem } from './types';
+import type { SpeechSegment } from './audio';
 import { scienceLesson, scienceSpeechText } from './science-lesson';
 
 export interface LessonSpeechRequest {
   text: string;
   language: 'auto' | 'zh' | 'en';
   segments?: string[];
+  multilingualSegments?: SpeechSegment[];
   pauseMs?: number;
 }
 
@@ -28,7 +30,18 @@ export function lessonSpeechRequest(item: DailyItem, lessonDetail?: string): Les
       pauseMs: 1000
     };
   }
-  if (item.kind === 'character') return { text: `${item.title}。这个字读，${item.title}。`, language: 'auto' };
+  if (item.kind === 'character') return {
+    text: `${item.title}。这个字读，${item.title}。${item.exampleWord ? `组词，${item.exampleWord}。` : ''}`,
+    language: 'zh'
+  };
+  if (item.kind === 'word') {
+    const translation = lessonDetail?.split('\n').at(-1)?.trim();
+    return translation ? {
+      text: `${item.title}。${translation}。`, language: 'auto',
+      multilingualSegments: [{ text: item.title, language: 'en' }, { text: translation, language: 'zh' }],
+      pauseMs: 1000
+    } : { text: item.title, language: 'en' };
+  }
   if (item.kind === 'science') return {
     text: scienceSpeechText(scienceLesson(item.title, lessonDetail)),
     language: 'zh'

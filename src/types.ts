@@ -19,6 +19,7 @@ export interface ContentItem {
   kind: ContentKind;
   title: string;
   subtitle?: string;
+  exampleWord?: string;
   body?: string;
   prompt?: string;
   answer?: string;
@@ -61,6 +62,7 @@ export interface DailyItem {
   contentId: string;
   title: string;
   detail?: string;
+  exampleWord?: string;
   kind: ContentKind;
   prompt?: string;
   answer?: string;

@@ -23,9 +23,19 @@ describe('课程朗读文本', () => {
     expect(lessonSpeechRequest(item)).toEqual({ text: 'Z. Z.', language: 'en', segments: ['Z', 'Z'], pauseMs: 1000 });
   });
 
-  it('其他课程保持原有自动语言朗读', () => {
-    const item: DailyItem = { id: 'char', contentId: 'char', kind: 'character', title: '人' };
-    expect(lessonSpeechRequest(item)).toEqual({ text: '人。这个字读，人。', language: 'auto' });
+  it('识字朗读汉字及其常用组词', () => {
+    const item: DailyItem = { id: 'char', contentId: 'char', kind: 'character', title: '人', exampleWord: '人们' };
+    expect(lessonSpeechRequest(item)).toEqual({ text: '人。这个字读，人。组词，人们。', language: 'zh' });
+  });
+
+  it('英语单词先读英文，再用中文语音读释义', () => {
+    const item: DailyItem = { id: 'word', contentId: 'word-1', kind: 'word', title: 'apple', detail: '苹果' };
+    expect(lessonSpeechRequest(item, item.detail)).toEqual({
+      text: 'apple。苹果。', language: 'auto', pauseMs: 1000,
+      multilingualSegments: [{ text: 'apple', language: 'en' }, { text: '苹果', language: 'zh' }]
+    });
+    expect(lessonSpeechRequest({ ...item, detail: '单词发音\n苹果' }, '单词发音\n苹果').multilingualSegments)
+      .toEqual([{ text: 'apple', language: 'en' }, { text: '苹果', language: 'zh' }]);
   });
 
   it('古诗朗读包含朝代和作者', () => {

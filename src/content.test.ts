@@ -43,4 +43,11 @@ describe('扩展课程内容库', () => {
     expect(count('writing', 'trace')).toBeGreaterThanOrEqual(300);
     expect(count('science', 'science')).toBeGreaterThanOrEqual(90);
   });
+
+  it('每个内置汉字都有一个包含该字的常用组词', () => {
+    const characters = BUILTIN_CONTENT.filter(item => item.kind === 'character');
+    expect(characters.every(item => item.exampleWord && item.exampleWord.includes(item.title))).toBe(true);
+    expect(characters.find(item => item.title === '人')?.exampleWord).toBe('人们');
+    expect(characters.find(item => item.title === '火')?.exampleWord).toBe('火苗');
+  });
 });

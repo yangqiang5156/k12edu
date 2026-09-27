@@ -28,6 +28,12 @@ describe('DeepSeek 一句话新增资料', () => {
     expect(() => validateGeneratedContent({ ...validMath, module: 'science' })).toThrow('资料类型与所属模块不匹配');
   });
 
+  it('智能生成汉字时必须提供包含该字的常用组词', () => {
+    const character = { ...validMath, module: 'literacy', kind: 'character', title: '人', subtitle: 'rén', body: '认识人字。', exampleWord: '人们', tags: ['汉字'] };
+    expect(validateGeneratedContent(character).exampleWord).toBe('人们');
+    expect(() => validateGeneratedContent({ ...character, exampleWord: '朋友' })).toThrow('组词');
+  });
+
   it('使用 DeepSeek V4 Flash JSON 输出且密钥只放在服务端请求头', async () => {
     const request = vi.fn().mockResolvedValue(response(validMath));
     const item = await generateContent('增加一道适合5岁的苹果加法题', { DEEPSEEK_API_KEY: 'secret' }, request);

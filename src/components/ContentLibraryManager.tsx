@@ -119,7 +119,7 @@ export function ContentLibraryManager({ content, learnedContentIds, onSave, onDe
         <details><summary>查看全部信息</summary><dl>
           <div><dt>ID</dt><dd>{item.id}</dd></div><div><dt>模块</dt><dd>{MODULE_META[item.module].title}</dd></div><div><dt>类型</dt><dd>{item.kind}</dd></div>
           <div><dt>适合年龄</dt><dd>{formatContentAge(item)}</dd></div>
-          {item.subtitle && <div><dt>副标题</dt><dd>{item.subtitle}</dd></div>}{item.body && <div><dt>正文</dt><dd>{item.body}</dd></div>}
+          {item.subtitle && <div><dt>副标题</dt><dd>{item.subtitle}</dd></div>}{item.exampleWord && <div><dt>组词</dt><dd>{item.exampleWord}</dd></div>}{item.body && <div><dt>正文</dt><dd>{item.body}</dd></div>}
           {item.prompt && <div><dt>题目</dt><dd>{item.prompt}</dd></div>}{item.options?.length && <div><dt>选项</dt><dd>{item.options.join(' / ')}</dd></div>}
           {item.answer && <div><dt>答案</dt><dd>{item.answer}</dd></div>}{item.stage && <div><dt>阶段</dt><dd>{item.stage}</dd></div>}
           {item.tags?.length && <div><dt>标签</dt><dd>{item.tags.join('、')}</dd></div>}{item.url && <div><dt>链接</dt><dd>{item.url}</dd></div>}
@@ -147,6 +147,7 @@ export function ContentLibraryManager({ content, learnedContentIds, onSave, onDe
         <fieldset className="content-age-fields"><legend>适合年龄</legend><label>最小年龄<input type="number" min="3" max="12" value={draft.ageMin ?? ''} onChange={(event) => setDraft({ ...draft, ageMin: event.target.value ? Number(event.target.value) : undefined })} /></label><label>最大年龄<input type="number" min="3" max="12" value={draft.ageMax ?? ''} onChange={(event) => setDraft({ ...draft, ageMax: event.target.value ? Number(event.target.value) : undefined })} /></label></fieldset>
         <label>名称（必填）<input value={draft.title} maxLength={80} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
         <label>副标题／作者／拼音<input value={draft.subtitle ?? ''} onChange={(event) => setDraft({ ...draft, subtitle: event.target.value })} /></label>
+        {draft.kind === 'character' && <label>常用组词<input value={draft.exampleWord ?? ''} placeholder="例如：大人" onChange={(event) => setDraft({ ...draft, exampleWord: event.target.value })} /></label>}
         <label>正文／讲解<textarea rows={5} value={draft.body ?? ''} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></label>
         <label>题目提示<input value={draft.prompt ?? ''} onChange={(event) => setDraft({ ...draft, prompt: event.target.value })} /></label>
         <label>选项（每行一个）<textarea rows={4} value={optionsText} onChange={(event) => setOptionsText(event.target.value)} /></label>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { speak, speakSequence, stopSpeech, speechError } from '../audio';
+import { speak, speakMultilingualSequence, speakSequence, stopSpeech, speechError } from '../audio';
 import { MODULE_META, type LearningAction, type LearningEvent, type LearningOutcome, type DailyModuleTask } from '../types';
 import { TraceCanvas } from './TraceCanvas';
 import { NumberLab } from './NumberLab';
@@ -41,7 +41,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
   const poemPhrases = poemParts.slice(1).join('\n').match(/[^，。！？；\n]+[，。！？；]?/g)?.map((phrase) => phrase.trim()).filter(Boolean) ?? [];
   const science = item.kind === 'science' ? scienceLesson(item.title, lessonDetail) : undefined;
   const audioButtonLabel = item.kind === 'math-choice' ? '听题目' : item.kind === 'character'
-    ? '听汉字朗读'
+    ? '听汉字和组词'
     : item.kind === 'letter'
       ? '听字母和例词'
       : item.kind === 'word' || item.kind === 'reader'
@@ -88,7 +88,9 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     setAudioPlaying(true);
     setAudioStatus('正在准备在线朗读…');
     try {
-      if (speechRequest.segments?.length) {
+      if (speechRequest.multilingualSegments?.length) {
+        await speakMultilingualSequence(speechRequest.multilingualSegments, true, speechRequest.pauseMs);
+      } else if (speechRequest.segments?.length) {
         await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs);
       } else {
         await speak(speechRequest.text, true, speechRequest.language);
@@ -128,6 +130,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
                 <section><span>过程与结果解释</span><p>{science.explanation}</p></section>
               </div> : <>
                 <h2>{item.prompt ?? item.title}</h2>
+                {item.kind === 'character' && item.exampleWord && <div className="character-word"><span>组词</span><strong>{item.exampleWord}</strong></div>}
                 {item.kind === 'poem' && lessonDetail ? <div className="lesson-detail poem-detail">
                   {poemAuthor && <span className="poem-author">{poemAuthor}</span>}
                   <div className="poem-verses">{poemPhrases.map((phrase, phraseIndex) => <span key={`${phrase}-${phraseIndex}`}>{phrase}</span>)}</div>

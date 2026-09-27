@@ -108,9 +108,10 @@ export function ParentPanel({ data, onClose, onSaveSettings, onResolveRedemption
           {Object.entries(MODULE_META).map(([id, meta]) => {
             const moduleId = id as ModuleId;
             const enabled = draft.enabledModules.includes(moduleId);
+            const followsLiteracy = moduleId === 'writing' && enabled && draft.enabledModules.includes('literacy');
             return <div className={`module-setting-row ${enabled ? 'enabled' : ''}`} key={id}>
               <label className="switch-row"><span>{meta.icon} {meta.title}</span><input aria-label={`开启${meta.title}`} type="checkbox" checked={enabled} onChange={(e) => setDraft({ ...draft, enabledModules: e.target.checked ? [...draft.enabledModules, moduleId] : draft.enabledModules.filter((module) => module !== moduleId) })} /></label>
-              <label className="daily-count-field"><span>每日新内容</span><input aria-label={`${meta.title}每日新内容数`} type="number" min="1" max="10" step="1" disabled={!enabled} value={dailyContentCount(draft, moduleId)} onChange={(event) => setDraft({ ...draft, dailyContentCounts: { ...draft.dailyContentCounts, [moduleId]: Math.max(1, Math.min(10, Math.round(Number(event.target.value) || 1))) } })} /><b>个</b></label>
+              {followsLiteracy ? <span className="daily-count-field">随当天识字同步</span> : <label className="daily-count-field"><span>每日新内容</span><input aria-label={`${meta.title}每日新内容数`} type="number" min="1" max="10" step="1" disabled={!enabled} value={dailyContentCount(draft, moduleId)} onChange={(event) => setDraft({ ...draft, dailyContentCounts: { ...draft.dailyContentCounts, [moduleId]: Math.max(1, Math.min(10, Math.round(Number(event.target.value) || 1))) } })} /><b>个</b></label>}
             </div>;
           })}
           <label className="switch-row"><span>🔊 按钮和朗读声音</span><input type="checkbox" checked={draft.soundEnabled} onChange={(e) => setDraft({ ...draft, soundEnabled: e.target.checked })} /></label>

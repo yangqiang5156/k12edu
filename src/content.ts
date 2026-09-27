@@ -1,9 +1,10 @@
 import type { ContentItem, RewardDefinition } from './types';
 import { ensureContentAge } from './content-library';
 import curriculum from './data/curriculum.json';
+import characterWords from './data/character-words.json';
 import schoolPoems from './data/school-poems.json';
 
-export const BUILTIN_CONTENT_VERSION = '2026.09.15-3';
+export const BUILTIN_CONTENT_VERSION = '2026.09.27-1';
 
 interface SchoolPoem {
   title: string;
@@ -41,7 +42,8 @@ const allCharacterTitles = Array.from(new Set(Array.from(curriculum.characterCor
 const allCharacters = allCharacterTitles.map((title) => ({
   title,
   subtitle: characterDetails.get(title)?.subtitle ?? '幼小衔接常用字',
-  body: characterDetails.get(title)?.body ?? `认识“${title}”字，在生活中找一找它。`
+  body: characterDetails.get(title)?.body ?? `认识“${title}”字，在生活中找一找它。`,
+  exampleWord: (characterWords as Record<string, string>)[title]
 }));
 
 const englishWords: Array<[string, string]> = [
@@ -306,8 +308,8 @@ export const BUILTIN_CONTENT: ContentItem[] = ([
     id: `classic-${index + 2}`, module: 'guoxue', kind: 'classic', title, body,
     subtitle: `掌握${(index + 2) * 10}首古诗后解锁`, source: 'builtin'
   })),
-  ...allCharacters.map(({ title, subtitle, body }, index): ContentItem => ({
-    id: `char-${index + 1}`, module: 'literacy', kind: 'character', title, subtitle, body, source: 'builtin'
+  ...allCharacters.map(({ title, subtitle, body, exampleWord }, index): ContentItem => ({
+    id: `char-${index + 1}`, module: 'literacy', kind: 'character', title, subtitle, body, exampleWord, source: 'builtin'
   })),
   ...buildMathItems(),
   ...curriculum.letters.map(([upper, lower, example, translation, emoji], index): ContentItem => ({

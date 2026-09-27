@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { speak, speakSequence, stopSpeech } from './audio';
+import { speak, speakMultilingualSequence, speakSequence, stopSpeech } from './audio';
 
 class FakeAudio {
   static last: FakeAudio;
@@ -79,5 +79,21 @@ describe('在线朗读生命周期', () => {
     FakeAudio.last.onended?.();
     await job;
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+  });
+  it('英汉分段分别请求对应语言的语音', async () => {
+    setup();
+    vi.useFakeTimers();
+    const request = vi.fn().mockImplementation(async () => new Response('audio'));
+    vi.stubGlobal('fetch', request);
+    const job = speakMultilingualSequence([{ text: 'apple', language: 'en' }, { text: '苹果', language: 'zh' }], true);
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalledTimes(1));
+    expect(request.mock.calls.map(call => JSON.parse(call[1].body))).toEqual([
+      { text: 'apple', language: 'en' }, { text: '苹果', language: 'zh' }
+    ]);
+    FakeAudio.last.onended?.();
+    await vi.advanceTimersByTimeAsync(1000);
+    FakeAudio.last.onended?.();
+    await job;
+    expect(FakeAudio.instances).toHaveLength(1);
   });
 });

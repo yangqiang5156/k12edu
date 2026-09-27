@@ -1,5 +1,5 @@
 import type { AppData, DailyPlan, LearningAction, LearningEvent, LearningOutcome } from './types';
-import { attendanceBonusEntries, DAILY_PLAN_CURRICULUM_VERSION, datePlusDays, generateDailyPlan, localDateKey, milestoneBadgeEntry, rewardEntriesForCompletion, shouldGrantAttendanceBonus, weekStartKey } from './logic';
+import { alignWritingWithLiteracy, attendanceBonusEntries, DAILY_PLAN_CURRICULUM_VERSION, datePlusDays, enrichCharacterWords, generateDailyPlan, localDateKey, milestoneBadgeEntry, rewardEntriesForCompletion, shouldGrantAttendanceBonus, weekStartKey } from './logic';
 
 export const OUTCOME_LABELS: Record<LearningOutcome, string> = {
   independent: '独立完成', assisted: '需要提示', practice: '还需练习', unknown: '未记录表现'
@@ -38,6 +38,11 @@ export function ensureTodayPlan(data: AppData, date = localDateKey()): AppData {
         const previous = previousModules.get(module.module);
         return previous?.collectedAt || previous?.doneItemIds.length ? previous : module;
       });
+      todayPlan.modules = enrichCharacterWords(todayPlan.modules, data.content);
+      const writing = todayPlan.modules.find(module => module.module === 'writing');
+      if (writing && !writing.collectedAt && !writing.doneItemIds.length) {
+        todayPlan.modules = alignWritingWithLiteracy(date, todayPlan.modules, data.content);
+      }
       todayPlan.completedAt = existing.completedAt;
       todayPlan.weeklyBonusGranted = existing.weeklyBonusGranted;
     }
