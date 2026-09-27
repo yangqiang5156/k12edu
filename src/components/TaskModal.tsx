@@ -43,7 +43,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
   const audioButtonLabel = item.kind === 'math-choice' ? '听题目' : item.kind === 'character'
     ? '听汉字和组词'
     : item.kind === 'letter'
-      ? '听字母和例词'
+      ? '听字母、例词和中文'
       : item.kind === 'word' || item.kind === 'reader'
         ? '听英语朗读'
         : item.kind === 'poem' || item.kind === 'classic'

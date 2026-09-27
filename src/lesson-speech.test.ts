@@ -1,21 +1,39 @@
 import { describe, expect, it } from 'vitest';
 import { lessonSpeechRequest } from './lesson-speech';
+import { BUILTIN_CONTENT } from './content';
 import type { DailyItem } from './types';
 
 describe('课程朗读文本', () => {
-  it('字母B只朗读大写、小写和例词各一次', () => {
+  it('字母B依次朗读大小写字母、英文例词及其中文意思', () => {
     const item: DailyItem = {
       id: 'today-letter-b', contentId: 'letter-b', kind: 'letter', title: 'B b',
       detail: '字母 B\n⚽ ball · 球'
     };
     expect(lessonSpeechRequest(item)).toEqual({
-      text: 'B. B. ball.',
-      language: 'en',
-      segments: ['B', 'B', 'ball'],
+      text: 'B. B. ball. 球。',
+      language: 'auto',
+      multilingualSegments: [
+        { text: 'B', language: 'en' },
+        { text: 'B', language: 'en' },
+        { text: 'ball', language: 'en' },
+        { text: '球', language: 'zh' }
+      ],
       pauseMs: 1000
     });
-    expect(lessonSpeechRequest(item).text).not.toMatch(/[\u4e00-\u9fff⚽]/);
     expect(lessonSpeechRequest(item).text).not.toContain('is for');
+  });
+
+  it('26 个内置字母例词都带中文朗读段', () => {
+    const letters = BUILTIN_CONTENT.filter(item => item.kind === 'letter');
+    expect(letters).toHaveLength(26);
+    for (const letter of letters) {
+      const request = lessonSpeechRequest({
+        id: letter.id, contentId: letter.id, kind: 'letter', title: letter.title,
+        detail: [letter.subtitle, letter.body].filter(Boolean).join('\n')
+      });
+      expect(request.multilingualSegments).toHaveLength(4);
+      expect(request.multilingualSegments?.map(segment => segment.language)).toEqual(['en', 'en', 'en', 'zh']);
+    }
   });
 
   it('缺少例词时仍只朗读大小写字母', () => {

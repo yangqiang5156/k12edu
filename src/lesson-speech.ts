@@ -10,9 +10,13 @@ export interface LessonSpeechRequest {
   pauseMs?: number;
 }
 
-function englishExample(detail?: string): string | undefined {
+function englishExample(detail?: string): { word?: string; translation?: string } {
   const exampleLine = detail?.split('\n').at(-1);
-  return exampleLine?.match(/[A-Za-z]+(?:[-'][A-Za-z]+)*/)?.[0];
+  const [englishPart, chinesePart] = exampleLine?.split('·', 2) ?? [];
+  return {
+    word: englishPart?.match(/[A-Za-z]+(?:[-'][A-Za-z]+)*/)?.[0],
+    translation: chinesePart?.trim() || undefined
+  };
 }
 
 export function lessonSpeechRequest(item: DailyItem, lessonDetail?: string): LessonSpeechRequest {
@@ -22,7 +26,16 @@ export function lessonSpeechRequest(item: DailyItem, lessonDetail?: string): Les
     const example = englishExample(item.detail);
     // 大小写字母的名称读音相同。合成时统一传大写形式，
     // 避免单个小写 a / i 被英文模型当作冠词或代词。
-    const segments = [upper, upper, example].filter((value): value is string => Boolean(value));
+    const segments = [upper, upper, example.word].filter((value): value is string => Boolean(value));
+    if (example.translation) return {
+      text: `${segments.join('. ')}. ${example.translation}。`,
+      language: 'auto',
+      multilingualSegments: [
+        ...segments.map(text => ({ text, language: 'en' as const })),
+        { text: example.translation, language: 'zh' as const }
+      ],
+      pauseMs: 1000
+    };
     return {
       text: segments.join('. ') + '.',
       language: 'en',
