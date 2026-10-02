@@ -279,7 +279,7 @@ export function regenerateDailyPlanForSettings(
 
 export function moduleRewards(module: ModuleId): Record<'stars' | 'foodHalfUnits' | 'xp', number> {
   return module === 'writing'
-    ? { stars: 1, foodHalfUnits: 1, xp: 1 }
+    ? { stars: 1, foodHalfUnits: 2, xp: 1 }
     : { stars: 2, foodHalfUnits: 2, xp: 2 };
 }
 
@@ -309,6 +309,9 @@ export function rewardBalanceAdjustmentEntries(
   date: string,
   createdAt = new Date().toISOString()
 ): RewardLedgerEntry[] {
+  if (Object.values(target).some(value => !Number.isSafeInteger(value) || value < 0) || target.foodHalfUnits % 2 !== 0) {
+    throw new Error('奖励余额必须为非负整数，胡萝卜按整根设置');
+  }
   const sourceId = `parent-balance-${createdAt}`;
   return (['stars', 'foodHalfUnits', 'gems', 'badges'] as const).flatMap((currency) => {
     const delta = target[currency] - current[currency];

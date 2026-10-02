@@ -141,11 +141,11 @@ describe('每日排课', () => {
 });
 
 describe('奖励与全勤', () => {
-  it('控笔奖励使用半单位粮食，其他模块为一份粮食', () => {
-    expect(moduleRewards('writing')).toEqual({ stars: 1, foodHalfUnits: 1, xp: 1 });
+  it('控笔和其他模块均奖励一整根胡萝卜', () => {
+    expect(moduleRewards('writing')).toEqual({ stars: 1, foodHalfUnits: 2, xp: 1 });
     expect(moduleRewards('math')).toEqual({ stars: 2, foodHalfUnits: 2, xp: 2 });
     const entries = rewardEntriesForCompletion(completion('task-writing', 'writing'));
-    expect(calculateWallet(entries).foodHalfUnits / 2).toBe(0.5);
+    expect(calculateWallet(entries).foodHalfUnits / 2).toBe(1);
   });
 
   it('同一完成事件生成固定ID，写入时可以幂等覆盖', () => {
@@ -182,10 +182,18 @@ describe('奖励与全勤', () => {
 
   it('家长修改奖励余额时只追加差额流水', () => {
     const current = { stars: 8, foodHalfUnits: 4, xp: 8, gems: 0, badges: 0 };
-    const entries = rewardBalanceAdjustmentEntries(current, { stars: 12, foodHalfUnits: 3, gems: 2, badges: 0 }, '2026-08-19', '2026-08-19T10:00:00.000Z');
+    const entries = rewardBalanceAdjustmentEntries(current, { stars: 12, foodHalfUnits: 2, gems: 2, badges: 0 }, '2026-08-19', '2026-08-19T10:00:00.000Z');
     expect(entries.map((entry) => [entry.currency, entry.delta])).toEqual([
-      ['stars', 4], ['foodHalfUnits', -1], ['gems', 2]
+      ['stars', 4], ['foodHalfUnits', -2], ['gems', 2]
     ]);
+  });
+  it('奖励余额不接受小数及半根胡萝卜', () => {
+    const current = { stars: 8, foodHalfUnits: 4, xp: 8, gems: 0, badges: 0 };
+    const target = { stars: 8, foodHalfUnits: 4, gems: 0, badges: 0 };
+    for (const currency of ['stars', 'gems', 'badges'] as const) {
+      expect(() => rewardBalanceAdjustmentEntries(current, { ...target, [currency]: 1.5 }, '2026-10-02')).toThrow('整数');
+    }
+    expect(() => rewardBalanceAdjustmentEntries(current, { ...target, foodHalfUnits: 3 }, '2026-10-02')).toThrow('整根');
   });
 });
 

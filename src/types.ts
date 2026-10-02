@@ -155,6 +155,7 @@ export interface RewardDefinition {
   currency: 'stars' | 'badges';
   cost: number;
   enabled: boolean;
+  pricingVersion?: number;
 }
 
 export interface Redemption {

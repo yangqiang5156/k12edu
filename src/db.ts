@@ -194,7 +194,30 @@ export async function mutateAppData(update: (data: AppData) => AppData): Promise
 
 export async function loadAppData(date = localDateKey()): Promise<AppData> {
   await seedDatabase();
-  return mutateAppData(data => ensureTodayPlan(data, date));
+  return mutateAppData(data => ensureTodayPlan(upgradeRewards(data), date));
+}
+
+// 保留旧半单位流水，用补齐记录将余额迁移到整根；重复加载不重复补发。
+function upgradeRewards(data: AppData): AppData {
+  const foodHalfUnits = data.ledger.filter(entry => entry.currency === 'foodHalfUnits').reduce((sum, entry) => sum + entry.delta, 0);
+  const music = DEFAULT_REWARDS.find(reward => reward.id === 'music')!;
+  const rewards = data.rewardDefinitions.map(reward => {
+    if (reward.id === music.id && (reward.pricingVersion ?? 1) < music.pricingVersion!) {
+      return { ...reward, cost: music.cost, currency: music.currency, pricingVersion: music.pricingVersion };
+    }
+    return Number.isSafeInteger(reward.cost) && reward.cost >= 1
+      ? reward : { ...reward, cost: Math.max(1, Math.round(reward.cost) || 1) };
+  });
+  const now = new Date().toISOString();
+  return {
+    ...data,
+    ledger: foodHalfUnits % 2 === 0 ? data.ledger : [...data.ledger, {
+      id: `whole-carrot-${crypto.randomUUID()}`, date: localDateKey(), createdAt: now,
+      reason: '历史胡萝卜余额补齐为整根', sourceId: 'whole-carrot-migration', currency: 'foodHalfUnits', delta: 1
+    }],
+    rewardDefinitions: rewards.some(reward => reward.id === music.id)
+      ? rewards : [...rewards, { ...music }]
+  };
 }
 
 export async function recordLearning(taskId: string, itemId: string, action: LearningAction): Promise<AppData> {
@@ -285,6 +308,7 @@ export async function saveRedemption(redemption: Redemption): Promise<void> {
 }
 
 export async function saveRewardDefinition(reward: RewardDefinition): Promise<void> {
+  if (!Number.isSafeInteger(reward.cost) || reward.cost < 1) throw new Error('兑换价格必须为正整数');
   await (await database()).put('rewardDefinitions', reward);
 }
 
@@ -325,14 +349,14 @@ export async function restoreBackup(backup: BackupEnvelopeV1): Promise<void> {
   if (!validation.ok) throw new Error(validation.error);
   // 先完成所有纯数据校验与迁移，再进入覆盖事务。
   const restored = validation.backup.data;
-  const next = ensureTodayPlan({ ...restored, settings: {
+  const next = ensureTodayPlan(upgradeRewards({ ...restored, settings: {
     ...restored.settings,
     dailyContentCounts: { ...DEFAULT_DAILY_CONTENT_COUNTS, ...restored.settings.dailyContentCounts },
     childAge: restored.settings.childAge ?? 4,
     mathStartStage: restored.settings.mathStartStage ?? 1,
     englishStart: restored.settings.englishStart ?? 'letters',
     storySettings: { ...DEFAULT_STORY_SETTINGS, ...restored.settings.storySettings }
-  }, storyProgress: restored.storyProgress ?? [], storyListenEvents: restored.storyListenEvents ?? [] });
+  }, storyProgress: restored.storyProgress ?? [], storyListenEvents: restored.storyListenEvents ?? [] }));
   const tx = (await database()).transaction(STORES, 'readwrite');
   try {
     for (const store of STORES) await tx.objectStore(store).clear();

@@ -342,6 +342,7 @@ export const BUILTIN_CONTENT: ContentItem[] = ([
 ] as ContentItem[]).map(ensureContentAge);
 
 export const DEFAULT_REWARDS: RewardDefinition[] = [
+  { id: 'music', title: '听音乐10分钟', icon: '🎵', currency: 'stars', cost: 20, enabled: true, pricingVersion: 2 },
   { id: 'snack', title: '一份小零食', icon: '🍪', currency: 'stars', cost: 20, enabled: true },
   { id: 'cartoon', title: '看动画 15 分钟', icon: '📺', currency: 'stars', cost: 30, enabled: true },
   { id: 'pocket-money', title: '零花钱 2 元', icon: '🪙', currency: 'badges', cost: 2, enabled: true }

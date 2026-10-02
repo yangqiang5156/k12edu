@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDB } from 'idb';
-import { clearUserData, createBackup, DEFAULT_SETTINGS, importContentPack, loadAppData, mutateAppData, recordLearning, resolveReward, restoreBackup, saveStoryListening, updateLearningSettings } from './db';
+import { clearUserData, createBackup, DEFAULT_SETTINGS, importContentPack, loadAppData, mutateAppData, recordLearning, resolveReward, restoreBackup, saveRewardDefinition, saveStoryListening, updateLearningSettings } from './db';
 import { calculateWallet, localDateKey } from './logic';
 import { validateBackup } from './validation';
 
@@ -12,6 +12,55 @@ beforeEach(async () => {
 });
 
 describe('IndexedDB 事务与恢复', () => {
+  it('已有账户补充音乐奖励、补齐半根余额，重复加载不重复发放', async () => {
+    const now = new Date().toISOString();
+    await mutateAppData(data => ({ ...data,
+      rewardDefinitions: [{ id: 'snack', title: '自定义零食', icon: '🍪', currency: 'stars', cost: 7, enabled: false }],
+      ledger: [{ id: 'old-carrot', date: localDateKey(), createdAt: now, currency: 'foodHalfUnits', delta: 3, sourceId: 'old', reason: '历史奖励' }]
+    }));
+    const first = await loadAppData();
+    expect(calculateWallet(first.ledger).foodHalfUnits / 2).toBe(2);
+    expect(first.rewardDefinitions.find(reward => reward.id === 'music')).toMatchObject({ title: '听音乐10分钟', currency: 'stars', cost: 20, enabled: true });
+    expect(first.rewardDefinitions.find(reward => reward.id === 'snack')).toMatchObject({ title: '自定义零食', cost: 7, enabled: false });
+    const second = await loadAppData();
+    expect(second.ledger).toHaveLength(2);
+    expect(second.rewardDefinitions.filter(reward => reward.id === 'music')).toHaveLength(1);
+    await saveRewardDefinition({ ...second.rewardDefinitions.find(reward => reward.id === 'music')!, cost: 5 });
+    expect((await loadAppData()).rewardDefinitions.find(reward => reward.id === 'music')?.cost).toBe(5);
+  });
+  it('恢复旧备份后立即得到整数胡萝卜余额和音乐奖励', async () => {
+    const data = await loadAppData();
+    const backup = createBackup({ ...data, rewardDefinitions: [], ledger: [{ id: 'half', date: localDateKey(), createdAt: new Date().toISOString(), currency: 'foodHalfUnits', delta: 1, sourceId: 'old', reason: '历史奖励' }] });
+    await restoreBackup(backup);
+    const db = await openDB('lexue-workbench', 3);
+    expect(calculateWallet(await db.getAll('ledger')).foodHalfUnits).toBe(2);
+    expect(await db.get('rewardDefinitions', 'music')).toMatchObject({ cost: 20 });
+    db.close();
+  });
+  it('音乐兑换经家长确认只扣除20颗星星', async () => {
+    const date = localDateKey(); const now = new Date().toISOString();
+    await mutateAppData(data => ({ ...data, rewardDefinitions: [],
+      ledger: [{ id: 'music-credit', date, createdAt: now, reason: '测试', sourceId: 'test', currency: 'stars', delta: 25 }],
+      redemptions: [{ id: 'music-request', rewardId: 'music', rewardTitle: '听音乐10分钟', requestedAt: now, status: 'pending' }]
+    }));
+    await loadAppData();
+    await resolveReward('music-request', true);
+    expect(calculateWallet((await loadAppData()).ledger).stars).toBe(5);
+  });
+  it('已有音乐奖励自动迁移为20星星，保留标题和开关，迁移后不覆盖家长修改', async () => {
+    await mutateAppData(data => ({ ...data, rewardDefinitions: [{ id: 'music', title: '听喜欢的音乐10分钟', icon: '🎵', currency: 'stars', cost: 3, enabled: false }] }));
+    const data = await loadAppData();
+    const music = data.rewardDefinitions.find(reward => reward.id === 'music')!;
+    expect(music).toMatchObject({ title: '听喜欢的音乐10分钟', cost: 20, enabled: false, pricingVersion: 2 });
+    await saveRewardDefinition({ ...music, cost: 25 });
+    expect((await loadAppData()).rewardDefinitions.find(reward => reward.id === 'music')?.cost).toBe(25);
+  });
+  it('兑换价格拒绝小数，并将已有的小数价格改为整数', async () => {
+    const reward = { id: 'decimal', title: '小奖励', icon: '🎁', currency: 'stars' as const, cost: 2.5, enabled: true };
+    await expect(saveRewardDefinition(reward)).rejects.toThrow('正整数');
+    await mutateAppData(data => ({ ...data, rewardDefinitions: [reward] }));
+    expect((await loadAppData()).rewardDefinitions.find(item => item.id === 'decimal')?.cost).toBe(3);
+  });
   it('首次加载产生计划，清空后无需刷新页面即有今日计划', async () => {
     const data = await loadAppData();
     expect(data.plans.some(plan => plan.date === localDateKey())).toBe(true);
