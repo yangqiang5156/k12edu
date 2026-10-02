@@ -27,6 +27,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
   const [showLab, setShowLab] = useState(false);
   const [audioStatus, setAudioStatus] = useState('');
   const [audioPlaying, setAudioPlaying] = useState(false);
+  const [activeScienceSection, setActiveScienceSection] = useState<number | null>(null);
   const item = task.items[index];
   const isDone = task.doneItemIds.includes(item.id);
   const meta = MODULE_META[task.module];
@@ -57,6 +58,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     stopSpeech();
     setAudioStatus('');
     setAudioPlaying(false);
+    setActiveScienceSection(null);
     setFeedback('');
     setTraceReady(false);
   }, [item.id]);
@@ -86,12 +88,18 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     const job = ++readJob.current;
     const speechRequest = lessonSpeechRequest(item, lessonDetail);
     setAudioPlaying(true);
+    setActiveScienceSection(null);
     setAudioStatus('正在准备在线朗读…');
     try {
       if (speechRequest.multilingualSegments?.length) {
         await speakMultilingualSequence(speechRequest.multilingualSegments, true, speechRequest.pauseMs);
       } else if (speechRequest.segments?.length) {
-        await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs);
+        await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs, section => {
+          if (job === readJob.current && item.kind === 'science') {
+            setActiveScienceSection(section);
+            if (section !== null) setAudioStatus('正在朗读科学讲解…');
+          }
+        });
       } else {
         await speak(speechRequest.text, true, speechRequest.language);
       }
@@ -99,7 +107,10 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     } catch (error) {
       if (job === readJob.current) setAudioStatus(speechError(error));
     } finally {
-      if (job === readJob.current) setAudioPlaying(false);
+      if (job === readJob.current) {
+        setAudioPlaying(false);
+        setActiveScienceSection(null);
+      }
     }
   };
 
@@ -124,10 +135,10 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
                 <div><span>小写字母</span><strong>{letterLower}</strong></div>
                 <div className="letter-word-step"><span>例词</span><strong>{letterExample}</strong></div>
               </div> : science ? <div className="science-lesson">
-                <section><span>科学问题</span><strong>{science.question}</strong></section>
-                <section><span>观察方法</span><p>{science.method}</p></section>
-                <section><span>观察结果</span><p>{science.result}</p></section>
-                <section><span>过程与结果解释</span><p>{science.explanation}</p></section>
+                <section className={activeScienceSection === 0 ? 'is-reading' : undefined} aria-current={activeScienceSection === 0 ? 'true' : undefined}><span>科学问题</span><strong>{science.question}</strong></section>
+                <section className={activeScienceSection === 1 ? 'is-reading' : undefined} aria-current={activeScienceSection === 1 ? 'true' : undefined}><span>观察方法</span><p>{science.method}</p></section>
+                <section className={activeScienceSection === 2 ? 'is-reading' : undefined} aria-current={activeScienceSection === 2 ? 'true' : undefined}><span>观察结果</span><p>{science.result}</p></section>
+                <section className={activeScienceSection === 3 ? 'is-reading' : undefined} aria-current={activeScienceSection === 3 ? 'true' : undefined}><span>过程与结果解释</span><p>{science.explanation}</p></section>
               </div> : <>
                 <h2>{item.prompt ?? item.title}</h2>
                 {item.kind === 'character' && item.exampleWord && <div className="character-word"><span>组词</span><strong>{item.exampleWord}</strong></div>}

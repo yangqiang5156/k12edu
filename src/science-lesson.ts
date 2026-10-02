@@ -62,6 +62,15 @@ export function scienceLesson(title: string, method = ''): ScienceLesson {
   };
 }
 
+export function scienceSpeechSegments(lesson: ScienceLesson): string[] {
+  return [
+    `科学问题，${lesson.question}。`,
+    `观察方法，${lesson.method}。`,
+    `观察结果，${lesson.result}。`,
+    `科学解释，${lesson.explanation}`
+  ];
+}
+
 export function scienceSpeechText(lesson: ScienceLesson): string {
-  return `科学问题，${lesson.question}。观察方法，${lesson.method}。观察结果，${lesson.result}。科学解释，${lesson.explanation}`;
+  return scienceSpeechSegments(lesson).join('');
 }

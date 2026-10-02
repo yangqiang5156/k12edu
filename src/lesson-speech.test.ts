@@ -78,6 +78,9 @@ describe('课程朗读文本', () => {
     expect(request.text).toContain('观察方法');
     expect(request.text).toContain('观察结果');
     expect(request.text).toContain('科学解释');
+    expect(request.segments).toHaveLength(4);
+    expect(request.segments?.map(segment => segment.split('，')[0])).toEqual(['科学问题', '观察方法', '观察结果', '科学解释']);
+    expect(request.segments?.join('')).toBe(request.text);
   });
 });
 

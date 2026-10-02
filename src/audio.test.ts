@@ -7,6 +7,8 @@ class FakeAudio {
   src = '';
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  onplaying: (() => void) | null = null;
+  onpause: (() => void) | null = null;
   pause = vi.fn();
   play = vi.fn(async () => {});
   removeAttribute = vi.fn();
@@ -20,6 +22,26 @@ function setup() {
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
 }
 describe('在线朗读生命周期', () => {
+  it('科学四段逐个准备语音，避免触发服务并发限制', async () => {
+    setup();
+    let active = 0;
+    let maxActive = 0;
+    const request = vi.fn().mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active -= 1;
+      return new Response('audio');
+    });
+    vi.stubGlobal('fetch', request);
+    const job = speakSequence(['问题', '方法', '结果', '解释'], true, 'zh');
+    const settled = expect(job).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalled());
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(maxActive).toBe(1);
+    stopSpeech();
+    await settled;
+  });
   it('关闭声音时不请求接口', async () => {
     const request = vi.fn(); vi.stubGlobal('fetch', request);
     await speak('你好', false);
@@ -95,5 +117,51 @@ describe('在线朗读生命周期', () => {
     FakeAudio.last.onended?.();
     await job;
     expect(FakeAudio.instances).toHaveLength(1);
+  });
+  it('高亮只在实际播放时切换，暂停、段间停顿和取消时清除', async () => {
+    setup();
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('audio')));
+    const change = vi.fn();
+    const job = speakSequence(['科学问题', '观察方法'], true, 'zh', 1000, change);
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalledTimes(1));
+    expect(change).not.toHaveBeenCalled();
+    FakeAudio.last.onplaying?.();
+    expect(change).toHaveBeenLastCalledWith(0);
+    FakeAudio.last.onpause?.();
+    expect(change).toHaveBeenLastCalledWith(null);
+    FakeAudio.last.onplaying?.();
+    expect(change).toHaveBeenLastCalledWith(0);
+    FakeAudio.last.onended?.();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(change).toHaveBeenLastCalledWith(null);
+    await vi.advanceTimersByTimeAsync(1);
+    FakeAudio.last.onplaying?.();
+    expect(change).toHaveBeenLastCalledWith(1);
+    const settled = expect(job).rejects.toMatchObject({ name: 'AbortError' });
+    stopSpeech();
+    await settled;
+    expect(change).toHaveBeenLastCalledWith(null);
+    expect(FakeAudio.last.onplaying).toBeNull();
+  });
+  it('设备朗读也跟随实际开始高亮，并在结束后清除', async () => {
+    setup();
+    class FakeUtterance {
+      onstart?: () => void; onend?: () => void;
+      constructor(public text: string) {}
+    }
+    let utterance: FakeUtterance | undefined;
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance);
+    vi.stubGlobal('speechSynthesis', { cancel: vi.fn(), speak: vi.fn((value: FakeUtterance) => { utterance = value; }) });
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(JSON.stringify({ error: '免费语音额度已用完' }), { status: 429 })));
+    const change = vi.fn();
+    const job = speakSequence(['科学问题'], true, 'zh', 1000, change);
+    await vi.waitFor(() => expect(utterance).toBeDefined());
+    expect(change).not.toHaveBeenCalled();
+    utterance?.onstart?.();
+    expect(change).toHaveBeenLastCalledWith(0);
+    utterance?.onend?.();
+    await job;
+    expect(change).toHaveBeenLastCalledWith(null);
   });
 });

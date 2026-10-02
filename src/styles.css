@@ -169,6 +169,8 @@ button:disabled { cursor: default; opacity: .45; }
 .science-lesson section:nth-child(2) { border-color: #bfe1d5; background: #effaf6; }
 .science-lesson section:nth-child(3) { border-color: #c9daf2; background: #f1f6fd; }
 .science-lesson section:nth-child(4) { border-color: #dfd2f2; background: #f7f2fc; }
+.science-lesson section.is-reading { border-color: #9270ce; background: #fff2c9; box-shadow: inset 4px 0 #9270ce, 0 5px 13px rgba(97,62,88,.1); }
+.science-lesson section.is-reading strong, .science-lesson section.is-reading p { color: #503378; }
 .science-lesson span { display: block; margin-bottom: 5px; color: #7d6d82; font-size: 12px; font-weight: 800; }
 .science-lesson strong { color: #543b5d; font-size: 20px; line-height: 1.45; }
 .science-lesson p { margin: 0; color: #594f60; font-size: 15px; line-height: 1.75; }

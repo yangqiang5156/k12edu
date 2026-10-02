@@ -57,7 +57,9 @@ export function stopSpeech(): void {
 
 export interface SpeechSegment { text: string; language: 'auto' | 'zh' | 'en' }
 
-async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: number): Promise<void> {
+export type SpeechSegmentChange = (index: number | null) => void;
+
+async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: number, onSegmentChange?: SpeechSegmentChange): Promise<void> {
   stopSpeech();
   const parts = segments.map((part) => ({ ...part, text: part.text.trim() })).filter(part => Boolean(part.text));
   if (!enabled || !parts.length) return;
@@ -82,13 +84,16 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
   try {
     let urls: string[];
     try {
-      urls = await Promise.all(parts.map(async ({ text, language }) => {
+      urls = [];
+      // 分段逐个准备，避免科学四段同时请求超过语音服务的并发上限。
+      for (const { text, language } of parts) {
+        controller.signal.throwIfAborted();
         const blob = await speechBlob(text, language, controller.signal);
         controller.signal.throwIfAborted();
         const url = URL.createObjectURL(blob);
         objectUrls.push(url);
-        return url;
-      }));
+        urls.push(url);
+      }
     } catch (error) {
       if (!(error instanceof SpeechQuotaError) || !globalThis.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') throw error;
       for (const [index, { text, language }] of parts.entries()) {
@@ -96,10 +101,12 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
         await new Promise<void>((resolve, reject) => {
           const utterance = new SpeechSynthesisUtterance(text);
           utterance.lang = language === 'en' ? 'en-US' : 'zh-CN'; utterance.rate = 0.85;
+          utterance.onstart = () => { if (!controller.signal.aborted) onSegmentChange?.(index); };
           utterance.onend = () => resolve(); utterance.onerror = event => reject(new Error(event.error === 'canceled' ? '朗读已取消' : '设备朗读失败'));
           controller.signal.addEventListener('abort', () => { globalThis.speechSynthesis.cancel(); reject(abortError()); }, { once: true });
           globalThis.speechSynthesis.speak(utterance);
         });
+        onSegmentChange?.(null);
         if (index < parts.length - 1) await new Promise<void>((resolve, reject) => {
           rejectPause = reject;
           pauseTimer = globalThis.setTimeout(() => { pauseTimer = undefined; rejectPause = undefined; resolve(); }, Math.max(1000, pauseMs));
@@ -114,6 +121,8 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
       try {
         await new Promise<void>((resolve, reject) => {
           rejectPlayback = reject;
+          activeAudio.onplaying = () => { if (!controller.signal.aborted) onSegmentChange?.(index); };
+          activeAudio.onpause = () => onSegmentChange?.(null);
           activeAudio.onended = () => resolve();
           activeAudio.onerror = () => reject(new Error('音频播放失败，请重试'));
           activeAudio.play().catch(reject);
@@ -123,6 +132,9 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
         activeAudio.pause();
         activeAudio.onended = null;
         activeAudio.onerror = null;
+        activeAudio.onplaying = null;
+        activeAudio.onpause = null;
+        onSegmentChange?.(null);
       }
       if (index < parts.length - 1) await new Promise<void>((resolve, reject) => {
         rejectPause = reject;
@@ -138,6 +150,9 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
     activeAudio.pause();
     activeAudio.onended = null;
     activeAudio.onerror = null;
+    activeAudio.onplaying = null;
+    activeAudio.onpause = null;
+    onSegmentChange?.(null);
     activeAudio.removeAttribute('src');
     for (const url of objectUrls) URL.revokeObjectURL(url);
     if (cancelCurrent === cancel) cancelCurrent = undefined;
@@ -148,8 +163,8 @@ export async function speak(text: string, enabled: boolean, language: SpeechSegm
   return runSpeech([{ text, language }], enabled, 0);
 }
 
-export async function speakSequence(segments: string[], enabled: boolean, language: SpeechSegment['language'] = 'auto', pauseMs = 1000): Promise<void> {
-  return runSpeech(segments.map(text => ({ text, language })), enabled, pauseMs);
+export async function speakSequence(segments: string[], enabled: boolean, language: SpeechSegment['language'] = 'auto', pauseMs = 1000, onSegmentChange?: SpeechSegmentChange): Promise<void> {
+  return runSpeech(segments.map(text => ({ text, language })), enabled, pauseMs, onSegmentChange);
 }
 
 export async function speakMultilingualSequence(segments: SpeechSegment[], enabled: boolean, pauseMs = 1000): Promise<void> {

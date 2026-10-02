@@ -1,6 +1,6 @@
 import type { DailyItem } from './types';
 import type { SpeechSegment } from './audio';
-import { scienceLesson, scienceSpeechText } from './science-lesson';
+import { scienceLesson, scienceSpeechText, scienceSpeechSegments } from './science-lesson';
 
 export interface LessonSpeechRequest {
   text: string;
@@ -57,7 +57,8 @@ export function lessonSpeechRequest(item: DailyItem, lessonDetail?: string): Les
   }
   if (item.kind === 'science') return {
     text: scienceSpeechText(scienceLesson(item.title, lessonDetail)),
-    language: 'zh'
+    language: 'zh',
+    segments: scienceSpeechSegments(scienceLesson(item.title, lessonDetail))
   };
   return { text: `${item.title}。${lessonDetail ?? ''}`, language: 'auto' };
 }
