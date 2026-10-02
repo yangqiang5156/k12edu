@@ -1,6 +1,5 @@
 import { loadEnv } from 'vite';
-import { createTtsMiddleware } from './server/tts.mjs';
-import { createContentGeneratorMiddleware } from './server/content-generator.mjs';
+import { createLocalServices } from './server/local-services.mjs';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -13,13 +12,11 @@ export default defineConfig(({ mode }) => ({
       name: 'online-services',
       configureServer(server) {
         const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
-        server.middlewares.use(createContentGeneratorMiddleware(env));
-        server.middlewares.use(createTtsMiddleware(env));
+        server.middlewares.use(createLocalServices(env));
       },
       configurePreviewServer(server) {
         const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
-        server.middlewares.use(createContentGeneratorMiddleware(env));
-        server.middlewares.use(createTtsMiddleware(env));
+        server.middlewares.use(createLocalServices(env));
       },
     },
     VitePWA({
