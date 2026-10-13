@@ -1,3 +1,4 @@
+import '../server/load-env.mjs';
 import { randomUUID } from 'node:crypto';
 import OSS from 'ali-oss';
 import pg from 'pg';

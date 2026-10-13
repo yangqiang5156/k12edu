@@ -1,5 +1,6 @@
 import { setDefaultResultOrder } from 'node:dns';
 import { randomUUID } from 'node:crypto';
+import { readJson } from './http.mjs';
 
 // 优先 IPv4，避免部分本地网络的 IPv6 路由导致云语音连接重置。
 setDefaultResultOrder('ipv4first');
@@ -138,7 +139,7 @@ export function createTtsMiddleware(env = process.env, request = fetch) {
       res.writeHead(200, {
         'Content-Type': audio.type,
         'Content-Length': audio.bytes.length,
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cache-Control': 'private, max-age=300',
         ETag: `"${key}"`,
         'X-Lexue-Audio-Cache': cacheState,
       });
@@ -147,27 +148,22 @@ export function createTtsMiddleware(env = process.env, request = fetch) {
     if (req.method !== 'POST') return sendError(405, '请使用 POST 请求');
     if (!req.headers['content-type']?.startsWith('application/json')) return sendError(415, '请使用 JSON 请求');
     if (req.headers['sec-fetch-site'] === 'cross-site') return sendError(403, '不允许跨站朗读请求');
-    if (Date.now() - windowStart >= 60000) { windowStart = Date.now(); calls = 0; }
-    if (active >= 3 || calls >= 60) return sendError(429, '朗读请求较多，请稍后再试');
-    active += 1;
-    calls += 1;
+    if (!usage) return sendError(503, '语音安全额度服务未配置');
+    let entered = false;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
     const close = () => controller.abort();
     res.on('close', close);
     try {
-      req.setEncoding('utf8');
-      let body = '';
-      for await (const chunk of req) {
-        body += chunk.toString();
-        if (Buffer.byteLength(body) > 24000) throw new ServiceError('朗读内容过长', 413);
-      }
-      let data;
-      try { data = JSON.parse(body); } catch { throw new ServiceError('请求内容不是有效 JSON', 400); }
+      const identity = await usage.authenticate(req);
+      const data = await readJson(req, 24000);
       if (!data || typeof data.text !== 'string' || !data.text.trim() || data.text.length > 3000) throw new ServiceError('朗读文本需要为 1–3000 个字符', 400);
       if (data.language !== undefined && !['auto', 'zh', 'en'].includes(data.language)) throw new ServiceError('朗读语言不受支持', 400);
       const text = data.text.trim();
-      const identity = usage ? await usage.authorize(req, 'tts') : undefined;
+      if (Date.now() - windowStart >= 60000) { windowStart = Date.now(); calls = 0; }
+      if (active >= 3 || calls >= 60) throw Object.assign(new Error('朗读请求较多，请稍后再试'), { status: 429 });
+      await usage.authorizeActor(identity, 'tts', { ip: req.clientIp || req.socket?.remoteAddress || 'unknown' });
+      active++; calls++; entered = true;
       const provider = env.TTS_PROVIDER || 'qwen';
       const configuration = provider === 'qwen' ? qwenConfiguration(env, data.language)
         : provider === 'minimax' ? { model: env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo', voice: env.MINIMAX_TTS_VOICE || 'female-shaonv' }
@@ -181,26 +177,26 @@ export function createTtsMiddleware(env = process.env, request = fetch) {
           return;
         }
       }
-      if (usage) await usage.assertGlobalBudget('tts');
-      const inflightKey = key;
+      await usage.assertPaid(identity);
+      const inflightKey = `${identity.familyId || identity.deviceId}:${key}`;
       const joined = inflight.has(inflightKey);
       if (!joined) {
         const promise = (async () => {
-          const audio = await synthesize(text, data.language, env, request, controller.signal, configuration);
+          const audio = await synthesize(text, data.language, env, usage.providerRequest(identity, request), controller.signal, configuration);
           if (cache) await cache.put(key, audio);
           return { audio, key };
         })().finally(() => inflight.delete(inflightKey));
         inflight.set(inflightKey, promise);
       }
       const result = await inflight.get(inflightKey);
-      if (usage) await usage.record(identity, { tts_requests: 1, tts_upstream: joined ? 0 : 1, tts_cache_hits: joined ? 1 : 0, tts_characters: text.length, tts_upstream_characters: joined ? 0 : text.length });
+      await usage.record(identity, { tts_requests: 1, tts_cache_hits: joined ? 1 : 0, tts_characters: text.length });
       sendAudio(result.audio, joined ? 'coalesced' : 'miss', result.key);
     } catch (error) {
-      sendError(error.status || (controller.signal.aborted ? 504 : 502), error instanceof ServiceError ? error.message : controller.signal.aborted ? '朗读超时，请稍后重试' : '语音服务暂时不可用，请检查网络或服务配置');
+      sendError(error.status || (controller.signal.aborted ? 504 : 502), error.status && error.status < 500 ? error.message : controller.signal.aborted ? '朗读超时，请稍后重试' : '语音服务暂时不可用');
     } finally {
       clearTimeout(timer);
       res.off('close', close);
-      active -= 1;
+      if (entered) active -= 1;
     }
   };
 }

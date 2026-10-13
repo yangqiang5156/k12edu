@@ -1,3 +1,4 @@
+import './load-env.mjs';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
@@ -9,6 +10,7 @@ import { createUsageService } from './usage.mjs';
 import { createAudioCache } from './audio-cache.mjs';
 import { createStoryStorage } from './story-storage.mjs';
 import { createStoryService } from './story-service.mjs';
+import { createEdgeSecurity } from './edge-security.mjs';
 
 const root = resolve('dist');
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg' };
@@ -16,6 +18,7 @@ const database = createDatabase();
 await initializeDatabase(database);
 const identity = createIdentityService(database);
 const usage = createUsageService(database, identity);
+const edgeSecurity = createEdgeSecurity(usage);
 const audioCache = createAudioCache();
 const storyStorage = createStoryStorage();
 const tts = createTtsMiddleware(process.env, fetch, { usage, cache: audioCache });
@@ -26,7 +29,7 @@ const server = createServer((req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  void identity.handle(req, res, () => stories.handle(req, res, () => contentGenerator(req, res, () => tts(req, res, async () => {
+  void edgeSecurity(req, res, () => identity.handle(req, res, () => stories.handle(req, res, () => contentGenerator(req, res, () => tts(req, res, async () => {
     try {
       const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
       if (path === '/healthz') {
@@ -71,8 +74,12 @@ const server = createServer((req, res) => {
       res.writeHead(200, { ...baseHeaders, ...(extname(file) === '.mp3' ? { 'Accept-Ranges': 'bytes' } : {}), 'Content-Length': data.length });
       res.end(req.method === 'HEAD' ? undefined : data);
     } catch { res.writeHead(404); res.end('文件不存在'); }
-  }))));
+  })))));
 });
+server.headersTimeout = 15000;
+server.requestTimeout = 30000;
+server.keepAliveTimeout = 5000;
+server.maxRequestsPerSocket = 100;
 
 server.listen(Number(process.env.PORT || 80), process.env.HOST || '0.0.0.0', () => {
   console.log(`乐学服务已启动；PostgreSQL=${database.configured ? '已配置' : '未配置'}；OSS=${audioCache.ossEnabled ? '已配置' : '未配置'}；故事OSS=${storyStorage.enabled ? '已配置' : '未配置'}`);

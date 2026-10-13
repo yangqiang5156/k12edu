@@ -1,3 +1,4 @@
+import { readJson } from './http.mjs';
 import { randomUUID } from 'node:crypto';
 
 const MODULE_KINDS = {
@@ -121,7 +122,7 @@ export async function generateContent(prompt, env = process.env, request = fetch
     try {
       return validateGeneratedContent(await requestCompletion(prompt, feedback, env, request, signal, onUsage));
     } catch (error) {
-      if (error.status === 503 || signal.aborted) throw error;
+      if ((error.status && error.status < 500) || error.status === 503 || signal.aborted) throw error;
       feedback = error instanceof Error ? error.message : '返回内容不完整';
       if (attempt === 1) throw error;
     }
@@ -146,42 +147,35 @@ export function createContentGeneratorMiddleware(env = process.env, request = fe
     if (req.method !== 'POST') return send(405, { error: '请使用 POST 请求' });
     if (!req.headers['content-type']?.startsWith('application/json')) return send(415, { error: '请使用 JSON 请求' });
     if (req.headers['sec-fetch-site'] === 'cross-site') return send(403, { error: '不允许跨站智能生成请求' });
-    if (Date.now() - windowStart >= 60000) { windowStart = Date.now(); calls = 0; }
-    if (active >= 2 || calls >= 20) return send(429, { error: '智能生成请求较多，请稍后再试' });
-    active += 1;
-    calls += 1;
+    if (!usage) return send(503, { error: '智能生成安全额度服务未配置' });
+    let entered = false, identity, tokens = 0;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60000);
     const close = () => controller.abort();
     res.on('close', close);
     try {
-      req.setEncoding('utf8');
-      let body = '';
-      for await (const chunk of req) {
-        body += chunk.toString();
-        if (Buffer.byteLength(body) > 8192) throw new ContentGenerationError('输入内容过长', 413);
-      }
-      let data;
-      try { data = JSON.parse(body); } catch { throw new ContentGenerationError('请求内容不是有效 JSON', 400); }
+      identity = await usage.authenticate(req);
+      const data = await readJson(req, 8192);
       if (!data || typeof data.prompt !== 'string' || !data.prompt.trim() || data.prompt.trim().length > 500) {
         throw new ContentGenerationError('请用 1–500 个字符描述要新增的资料', 400);
       }
-      const identity = usage ? await usage.authorize(req, 'ai') : undefined;
-      if (usage) await usage.assertGlobalBudget('ai');
-      let tokens = 0;
-      const item = await generateContent(data.prompt.trim(), env, request, controller.signal, (providerUsage) => {
+      if (Date.now() - windowStart >= 60000) { windowStart = Date.now(); calls = 0; }
+      if (active >= 2 || calls >= 20) throw Object.assign(new Error('智能生成请求较多，请稍后再试'), { status: 429 });
+      await usage.authorizeActor(identity, 'ai', { ip: req.clientIp || req.socket?.remoteAddress || 'unknown' });
+      active++; calls++; entered = true;
+      const item = await generateContent(data.prompt.trim(), env, usage.providerRequest(identity, request), controller.signal, (providerUsage) => {
         tokens += Number(providerUsage?.total_tokens || providerUsage?.totalTokens || 0);
       });
-      if (usage) await usage.record(identity, { ai_requests: 1, ai_tokens: tokens || Math.ceil(data.prompt.trim().length / 2) });
       send(200, { item });
     } catch (error) {
       send(error.status || (controller.signal.aborted ? 504 : 502), {
-        error: error instanceof ContentGenerationError ? error.message : controller.signal.aborted ? '智能生成超时，请稍后重试' : '智能生成暂时不可用，请检查网络或服务配置',
+        error: error.status && error.status < 500 ? error.message : controller.signal.aborted ? '智能生成超时，请稍后重试' : '智能生成暂时不可用',
       });
     } finally {
       clearTimeout(timer);
       res.off('close', close);
-      active -= 1;
+      if (entered) active -= 1;
+      if (identity && tokens) await usage.record(identity, { ai_tokens: tokens }).catch(error => console.error('AI统计写入失败', error.message));
     }
   };
 }

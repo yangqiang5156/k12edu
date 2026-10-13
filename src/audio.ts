@@ -39,7 +39,7 @@ async function speechBlob(text: string, language: string, signal: AbortSignal): 
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    if (response.status === 429 && /额度|免费语音/.test(error.error || '')) throw new SpeechQuotaError(error.error);
+    if (response.status === 403 || response.status === 429) throw new SpeechQuotaError(error.error);
     throw new Error(error.error || '语音服务暂时不可用，请稍后再试');
   }
   const blob = await response.blob();

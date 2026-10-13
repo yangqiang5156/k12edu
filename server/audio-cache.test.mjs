@@ -22,3 +22,17 @@ describe('语音共享缓存', () => {
     await expect(cache.get(key)).resolves.toMatchObject({ bytes: Buffer.from('wave'), type: 'audio/wav', source: 'local' });
   });
 });
+
+describe('缓存容量保护', () => {
+  it('淘汰旧内容并拒绝超过容量的单个音频', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'lexue-bounded-cache-')); temporary.push(directory);
+    const cache = createAudioCache({ TTS_CACHE_DIR: directory, TTS_CACHE_MAX_BYTES: '160' });
+    const key = cache.keyFor({ text: 'first' }), next = cache.keyFor({ text: 'second' });
+    await cache.put(key, { bytes: Buffer.alloc(80), type: 'audio/wav' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await cache.put(next, { bytes: Buffer.alloc(80), type: 'audio/wav' });
+    expect(await cache.get(key)).toBeUndefined();
+    expect(await cache.get(next)).toBeDefined();
+    await expect(cache.put(key, { bytes: Buffer.alloc(161), type: 'audio/wav' })).rejects.toThrow('过大');
+  });
+});

@@ -11,7 +11,7 @@ export interface CloudAccount {
   authenticated: boolean;
   deviceId: string;
   user?: { id: string; email: string; displayName: string; isAdmin: boolean };
-  family?: { id: string; name: string };
+  family?: { id: string; name: string; paidEnabled: boolean };
   limits?: { ttsDaily: number; aiDaily: number };
   children?: CloudChild[];
 }
@@ -95,7 +95,8 @@ export async function loginFamily(email: string, password: string) {
 }
 
 export async function logoutFamily() {
-  await authorizedFetch(api('/auth/logout'), { method: 'POST' }).catch(() => undefined);
+  const response = await authorizedFetch(api('/auth/logout'), { method: 'POST' });
+  if (!response.ok) throw new Error('退出未完成，请检查网络后重试');
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(CHILD_KEY);
   await guestSession();
@@ -143,12 +144,12 @@ export interface AdminOverview {
   alerts: Array<{ alert_key: string; kind: string; severity: 'warning' | 'critical'; message: string; updated_at: string }>;
 }
 export interface AdminFamily {
-  id: string; name: string; status: 'active' | 'blocked'; created_at: string;
+  id: string; name: string; paid_enabled: boolean; status: 'active' | 'blocked'; created_at: string;
   tts_daily_limit: number; ai_daily_limit: number; children: number; devices: number; tts_today: string; ai_today: string;
 }
 export const loadAdminOverview = () => jsonRequest<AdminOverview>('/admin/overview');
 export const loadAdminFamilies = () => jsonRequest<{ families: AdminFamily[] }>('/admin/families');
-export const updateAdminFamily = (id: string, changes: Partial<{ status: 'active' | 'blocked'; ttsDailyLimit: number; aiDailyLimit: number }>) => jsonRequest<{ ok: true }>(`/admin/families/${id}`, {
+export const updateAdminFamily = (id: string, changes: Partial<{ status: 'active' | 'blocked'; ttsDailyLimit: number; aiDailyLimit: number; paidEnabled: boolean }>) => jsonRequest<{ ok: true }>(`/admin/families/${id}`, {
   method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
 });
 export interface AdminContentPack { id: string; content_version: string; title: string; status: 'active' | 'inactive'; created_at: string; updated_at: string }

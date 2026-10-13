@@ -1,3 +1,4 @@
+import '../server/load-env.mjs';
 import { randomUUID } from 'node:crypto';
 
 const origin = process.env.LEXUE_SMOKE_URL || 'http://127.0.0.1:4174';

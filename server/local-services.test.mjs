@@ -17,7 +17,7 @@ describe('本地测试服务会话与语音', () => {
   it('不连接云数据库即可建立访客会话并调用受保护的语音接口', async () => {
     const request = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ output: { audio: { url: 'https://audio.oss-cn-beijing.aliyuncs.com/test.wav' } } })))
       .mockResolvedValueOnce(new Response('wave'));
-    const middleware = createLocalServices({ SESSION_SECRET: 'local-test-secret', DATABASE_URL: 'postgres://invalid', DATABASE_REQUIRED: 'true', QWEN_API_KEY: 'test', QWEN_WORKSPACE_ID: 'test' }, request);
+    const middleware = createLocalServices({ ALLOW_LOCAL_PAID_SERVICES: 'true', SESSION_SECRET: 'local-test-secret', DATABASE_URL: 'postgres://invalid', DATABASE_REQUIRED: 'true', QWEN_API_KEY: 'test', QWEN_WORKSPACE_ID: 'test' }, request);
     const session = await call(middleware, '/api/session/guest', { deviceId: 'test-local-device-1234' });
     expect(session.status).toBe(200);
     const { token } = JSON.parse(session.body);

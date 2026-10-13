@@ -1,3 +1,4 @@
+import '../server/load-env.mjs';
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createStoryStorage } from '../server/story-storage.mjs';

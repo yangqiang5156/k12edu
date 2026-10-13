@@ -1,3 +1,4 @@
+import { trustedClientIp } from './edge-security.mjs';
 import { createDatabase } from './database.mjs';
 import { createIdentityService } from './identity.mjs';
 import { createTtsMiddleware } from './tts.mjs';
@@ -12,6 +13,6 @@ export function createLocalServices(env, request = fetch) {
   const identity = createIdentityService(database, localEnv);
   const usage = createUsageService(database, identity, localEnv);
   const tts = createTtsMiddleware(localEnv, request, { usage });
-  const content = createContentGeneratorMiddleware(localEnv, request);
-  return (req, res, next) => identity.handle(req, res, () => content(req, res, () => tts(req, res, next)));
+  const content = createContentGeneratorMiddleware(localEnv, request, { usage });
+  return (req, res, next) => { req.clientIp = trustedClientIp(req, { TRUSTED_PROXY_IPS: 'none' }); return identity.handle(req, res, () => content(req, res, () => tts(req, res, next))); };
 }

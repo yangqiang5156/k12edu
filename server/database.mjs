@@ -3,6 +3,14 @@ import pg from 'pg';
 const { Pool } = pg;
 
 const schema = `
+CREATE TABLE IF NOT EXISTS api_rate_windows (key text PRIMARY KEY, count integer NOT NULL, expires_at timestamptz NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_rate_expiry ON api_rate_windows(expires_at);
+CREATE TABLE IF NOT EXISTS service_budgets (
+  usage_date date NOT NULL, capability text NOT NULL, scope_id text NOT NULL,
+  requests bigint NOT NULL DEFAULT 0, units bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY(usage_date,capability,scope_id)
+);
+CREATE TABLE IF NOT EXISTS upstream_leases (id uuid PRIMARY KEY, capability text NOT NULL, expires_at timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS families (
   id uuid PRIMARY KEY,
   name text NOT NULL,
@@ -44,6 +52,12 @@ CREATE TABLE IF NOT EXISTS account_limits (
   ai_daily_limit integer NOT NULL DEFAULT 20,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE families ADD COLUMN IF NOT EXISTS paid_enabled boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS access_sessions (
+  id uuid PRIMARY KEY, user_id uuid REFERENCES parent_users(id) ON DELETE CASCADE,
+  device_id text NOT NULL REFERENCES devices(id) ON DELETE CASCADE, expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_expiry ON access_sessions(expires_at);
 CREATE TABLE IF NOT EXISTS cloud_snapshots (
   child_id uuid PRIMARY KEY REFERENCES children(id) ON DELETE CASCADE,
   version bigint NOT NULL DEFAULT 0,
@@ -167,6 +181,8 @@ export function createDatabase(env = process.env) {
   }
   const pool = new Pool({
     connectionString,
+    statement_timeout: 15000,
+    idle_in_transaction_session_timeout: 15000,
     max: Number(env.DATABASE_POOL_MAX || 10),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 8_000,
@@ -174,6 +190,7 @@ export function createDatabase(env = process.env) {
   });
   return {
     configured: true,
+    pool,
     query: (text, values) => pool.query(text, values),
     transaction: async (callback) => {
       const client = await pool.connect();

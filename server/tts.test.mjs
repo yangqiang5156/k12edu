@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { synthesize, createTtsMiddleware } from './tts.mjs';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
+import { createUsageService } from './usage.mjs';
+const actor = { type: 'guest', deviceId: 'test-device-1234567' };
+const usage = () => createUsageService({ configured: false }, { authenticate: async () => actor }, { ALLOW_LOCAL_PAID_SERVICES: 'true' });
 const json = (data) => new Response(JSON.stringify(data));
 
 describe('三家在线语音协议', () => {
@@ -53,7 +56,7 @@ describe('三家在线语音协议', () => {
     const req = Readable.from([JSON.stringify({ text: '你好', language: 'zh' })]);
     Object.assign(req, { url: '/api/tts', method: 'POST', headers: { 'content-type': 'application/json' } });
     const res = Object.assign(new EventEmitter(), { destroyed: false, writeHead: vi.fn(), end: vi.fn() });
-    await createTtsMiddleware({ QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request)(req, res, vi.fn());
+    await createTtsMiddleware({ QWEN_API_KEY: 'secret', QWEN_WORKSPACE_ID: 'llm-test' }, request, { usage: usage() })(req, res, vi.fn());
     expect(JSON.parse(request.mock.calls[0][1].body).model).toBe('qwen-audio-3.1-tts-flash');
     expect(request).toHaveBeenCalledTimes(2);
     expect(res.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
@@ -83,7 +86,7 @@ describe('三家在线语音协议', () => {
       const req = Readable.from([JSON.stringify(body)]);
       Object.assign(req, { url: '/api/tts', method: 'POST', headers: { 'content-type': 'application/json' } });
       const res = Object.assign(new EventEmitter(), { writeHead: vi.fn(), end: vi.fn() });
-      await createTtsMiddleware({}, request)(req, res, vi.fn());
+      await createTtsMiddleware({}, request, { usage: usage() })(req, res, vi.fn());
       expect(res.writeHead.mock.calls[0][0]).toBe(400);
     }
     expect(request).not.toHaveBeenCalled();

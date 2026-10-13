@@ -1,3 +1,4 @@
+import '../server/load-env.mjs';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';

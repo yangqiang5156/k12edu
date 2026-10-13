@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { readJson, sendJson } from './http.mjs';
+import { createStoryAudio } from './story-audio.mjs';
+import { readJson, sendJson, apiError, requestIp } from './http.mjs';
 import { qwenConfiguration, synthesize } from './tts.mjs';
 
 const themes = new Set(['bedtime', 'habit', 'emotion', 'safety', 'friendship', 'fable', 'idiom', 'myth', 'history', 'classic', 'science', 'growth']);
@@ -77,7 +78,9 @@ function command(file, args) {
     let stdout = ''; let stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
-    child.on('error', reject);
+    const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('音频处理超时')); }, 120000);
+    child.on('error', error => { clearTimeout(timeout); reject(error); });
+    child.on('close', () => clearTimeout(timeout));
     child.on('close', code => code === 0 ? resolve(stdout.trim()) : reject(new Error(`${file} 执行失败：${stderr.slice(-500)}`)));
   });
 }
@@ -99,6 +102,9 @@ function publicStory(row, audioUrl) {
 
 export function createStoryService({ database, identity, usage, audioCache, storage, env = process.env, request = fetch }) {
   const running = new Set();
+  const audio = createStoryAudio({ storage, identity, usage, database, env });
+  let pumping = false;
+  let polling;
   const workRoot = env.STORY_WORK_DIR || '/app/data/story-work';
 
   const assertChild = async (familyId, childId) => {
@@ -111,15 +117,15 @@ export function createStoryService({ database, identity, usage, audioCache, stor
     const provider = env.TTS_PROVIDER || 'qwen';
     const configuration = provider === 'qwen' ? qwenConfiguration(env, 'zh') : { model: provider, voice: provider };
     const key = audioCache.keyFor({ provider, ...configuration, language: 'zh', text, rate });
+    await usage.authorizeActor(actor, 'tts', { background: true });
     const cached = await audioCache.get(key);
     if (cached) {
       await usage.record(actor, { tts_requests: 1, tts_cache_hits: 1, tts_characters: text.length });
       return { ...cached, ...configuration };
     }
-    await usage.assertGlobalBudget('tts');
-    const audio = await synthesize(text, 'zh', env, request, AbortSignal.timeout(90_000), { rate, ...configuration });
+    const audio = await synthesize(text, 'zh', env, usage.providerRequest(actor, request), AbortSignal.timeout(90_000), { rate, ...configuration });
     await audioCache.put(key, audio);
-    await usage.record(actor, { tts_requests: 1, tts_upstream: 1, tts_characters: text.length, tts_upstream_characters: text.length });
+    await usage.record(actor, { tts_requests: 1, tts_characters: text.length });
     return { ...audio, ...configuration };
   };
 
@@ -163,7 +169,8 @@ export function createStoryService({ database, identity, usage, audioCache, stor
         clips.push({ ...passage, path });
         await database.query('UPDATE story_audio_jobs SET completed_sentences=$2,updated_at=now() WHERE story_id=$1', [storyId, index + 1]);
       }
-      const durations = await Promise.all(clips.map(clip => duration(clip.path)));
+      const durations = [];
+      for (const clip of clips) durations.push(await duration(clip.path));
       let start = 0;
       const cues = clips.map((clip, index) => {
         const cue = { paragraphIndex: clip.paragraphIndex, text: clip.text, startSeconds: Number(start.toFixed(3)), endSeconds: Number((start + durations[index]).toFixed(3)) };
@@ -186,32 +193,50 @@ export function createStoryService({ database, identity, usage, audioCache, stor
       });
       await rm(directory, { recursive: true, force: true });
     } catch (error) {
-      const message = clean(error instanceof Error ? error.message : '音频生成失败', 500);
+      const message = '音频生成未完成，请稍后重试或联系管理员';
       console.error(`家庭故事 ${storyId} 音频生成失败：`, message);
       await database.query("UPDATE family_stories SET status='failed',error_message=$2,updated_at=now() WHERE id=$1", [storyId, message]).catch(() => undefined);
       await database.query("UPDATE story_audio_jobs SET status='failed',last_error=$2,updated_at=now() WHERE story_id=$1", [storyId, message]).catch(() => undefined);
-    } finally { running.delete(storyId); }
+    } finally { if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined); running.delete(storyId); }
   };
 
-  const queue = (storyId) => { setTimeout(() => void processAudio(storyId), 0); };
-
+  // 使用数据库会话锁：所有副本共用一个后台配音槽，崩溃后连接释放锁。
+  const queue = async () => {
+    if (pumping || !database.configured) return;
+    pumping = true;
+    const client = await database.pool.connect().catch(() => null);
+    if (!client) { pumping = false; return; }
+    let locked = false;
+    try {
+      const lock = await client.query("SELECT pg_try_advisory_lock(hashtext('lexue-story-worker')) AS locked");
+      locked = lock.rows[0].locked;
+      if (!locked) return;
+      for (const folder of await readdir(workRoot, { withFileTypes: true }).catch(() => [])) {
+        if (!folder.isDirectory() || !/^[0-9a-f-]{36}$/.test(folder.name)) continue;
+        const path = join(workRoot, folder.name), meta = await stat(path);
+        if (Date.now() - meta.mtimeMs > 86400000) await rm(path, { recursive: true, force: true });
+      }
+      const jobs = await client.query("SELECT story_id FROM story_audio_jobs WHERE status IN ('queued','processing') ORDER BY updated_at LIMIT 1");
+      if (jobs.rows[0]) await processAudio(jobs.rows[0].story_id);
+    } catch (error) { console.error('故事队列执行失败', error.message); }
+    finally {
+      if (locked) await client.query("SELECT pg_advisory_unlock(hashtext('lexue-story-worker'))").catch(() => undefined);
+      client.release(); pumping = false;
+    }
+  };
   const start = async () => {
     if (!database.configured) return;
-    const jobs = await database.query("SELECT story_id FROM story_audio_jobs WHERE status IN ('queued','processing') ORDER BY updated_at LIMIT 20");
-    for (const row of jobs.rows) queue(row.story_id);
+    await mkdir(workRoot, { recursive: true });
+    polling = setInterval(() => void queue(), 3000); polling.unref();
+    void queue();
   };
 
   const handle = async (req, res, next) => {
     const url = new URL(req.url || '/', 'http://localhost');
     const path = url.pathname;
-    const builtIn = path.match(/^\/api\/stories\/builtin\/([a-z0-9-]+-v\d+\.mp3)$/);
-    if (builtIn && ['GET', 'HEAD'].includes(req.method)) {
-      const target = storage.urlFor(storage.builtInKey(builtIn[1]));
-      if (!target) return sendJson(res, 503, { error: '故事音频存储尚未配置' });
-      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' }); res.end(); return;
-    }
     if (!path.startsWith('/api/stories/')) return next();
     try {
+      if (await audio.handle(req, res, url)) return;
       if (!database.configured) throw Object.assign(new Error('家庭故事需要配置 PostgreSQL'), { status: 503 });
       const allowGuest = path === '/api/stories/published';
       const actor = await identity.authenticate(req, { allowGuest });
@@ -223,13 +248,13 @@ export function createStoryService({ database, identity, usage, audioCache, stor
         const childId = clean(url.searchParams.get('childId'), 60);
         await assertChild(actor.familyId, childId);
         const result = await database.query("SELECT * FROM family_stories WHERE family_id=$1 AND child_id=$2 AND status='published' ORDER BY published_at DESC", [actor.familyId, childId]);
-        return sendJson(res, 200, { stories: result.rows.map(row => publicStory(row, storage.urlFor(row.audio_object_key))) });
+        return sendJson(res, 200, { stories: result.rows.map(row => publicStory(row, audio.urlFor(row, actor))) });
       }
       if (path === '/api/stories/family' && req.method === 'GET') {
         const childId = clean(url.searchParams.get('childId'), 60);
         await assertChild(actor.familyId, childId);
         const result = await database.query("SELECT * FROM family_stories WHERE family_id=$1 AND child_id=$2 AND status<>'archived' ORDER BY updated_at DESC", [actor.familyId, childId]);
-        return sendJson(res, 200, { stories: result.rows.map(row => publicStory(row, row.audio_object_key ? storage.urlFor(row.audio_object_key) : undefined)) });
+        return sendJson(res, 200, { stories: result.rows.map(row => publicStory(row, row.audio_object_key ? audio.urlFor(row, actor) : undefined)) });
       }
       if (path === '/api/stories/generate' && req.method === 'POST') {
         const body = await readJson(req, 8192);
@@ -237,27 +262,29 @@ export function createStoryService({ database, identity, usage, audioCache, stor
         const topic = clean(body.topic, 200); const age = Number(body.age); const durationMinutes = Number(body.durationMinutes); const theme = clean(body.theme, 30);
         if (!topic || unsafe.test(topic)) throw Object.assign(new Error('请填写适合儿童的故事主题'), { status: 400 });
         if (!Number.isInteger(age) || age < 3 || age > 12 || !lengths.has(durationMinutes) || !themes.has(theme)) throw Object.assign(new Error('故事年龄、长度或类型无效'), { status: 400 });
-        const generatedToday = await database.query('SELECT generations FROM story_generation_daily WHERE usage_date=current_date AND family_id=$1', [actor.familyId]);
-        if (Number(generatedToday.rows[0]?.generations || 0) >= Number(env.STORY_DAILY_GENERATION_LIMIT || 3)) throw Object.assign(new Error('今天已生成 3 篇故事，明天可以继续创作'), { status: 429 });
-        await usage.authorize(req, 'ai'); await usage.assertGlobalBudget('ai');
+        await usage.authorizeActor(actor, 'ai', { ip: requestIp(req) });
+        await usage.reserveStories(actor);
         let tokens = 0;
-        const draft = await generateStory({ topic, age, durationMinutes, theme, childName: child.name, useChildName: body.useChildName === true }, env, request, AbortSignal.timeout(90_000), info => { tokens += Number(info?.total_tokens || 0); });
-        await usage.record(actor, { ai_requests: 1, ai_tokens: tokens || Math.ceil(topic.length / 2) });
-        await database.query(`INSERT INTO story_generation_daily(usage_date,family_id,generations) VALUES(current_date,$1,1)
-          ON CONFLICT(usage_date,family_id) DO UPDATE SET generations=story_generation_daily.generations+1,updated_at=now()`, [actor.familyId]);
+        let draft;
+        try {
+          draft = await generateStory({ topic, age, durationMinutes, theme, childName: child.name, useChildName: body.useChildName === true }, env, usage.providerRequest(actor, request), AbortSignal.timeout(90_000), info => { tokens += Number(info?.total_tokens || 0); });
+        } finally { if (tokens) await usage.record(actor, { ai_tokens: tokens }); }
         return sendJson(res, 200, { story: { ...draft, durationMinutes } });
       }
       if (path === '/api/stories/family' && req.method === 'POST') {
         const body = await readJson(req, 32 * 1024); const childId = clean(body.childId, 60);
         await assertChild(actor.familyId, childId);
-        const count = await database.query("SELECT count(*)::int total FROM family_stories WHERE family_id=$1 AND status<>'archived'", [actor.familyId]);
-        if (Number(count.rows[0]?.total || 0) >= Number(env.STORY_FAMILY_LIMIT || 50)) throw Object.assign(new Error('家庭故事数量已达到上限，请先归档旧故事'), { status: 409 });
-        const draft = validateStoryDraft(body, { age: body.ageMin, theme: body.themes?.[0] });
-        const durationMinutes = lengths.has(Number(body.durationMinutes)) ? Number(body.durationMinutes) : 5;
-        const id = randomUUID(); const contentVersion = `text-${hash(JSON.stringify(draft))}`;
-        const result = await database.query(`INSERT INTO family_stories(id,family_id,child_id,created_by,title,summary,stage,age_min,age_max,themes,paragraphs,duration_minutes,content_version)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-        [id, actor.familyId, childId, actor.userId, draft.title, draft.summary, draft.stage, draft.ageMin, draft.ageMax, draft.themes, JSON.stringify(draft.paragraphs), durationMinutes, contentVersion]);
+        const result = await database.transaction(async client => {
+          await client.query('SELECT id FROM families WHERE id=$1 FOR UPDATE', [actor.familyId]);
+          const count = await client.query("SELECT count(*)::int total FROM family_stories WHERE family_id=$1 AND status<>'archived'", [actor.familyId]);
+          if (Number(count.rows[0]?.total || 0) >= Number(env.STORY_FAMILY_LIMIT || 50)) throw Object.assign(new Error('家庭故事数量已达到上限，请先归档旧故事'), { status: 409 });
+          const draft = validateStoryDraft(body, { age: body.ageMin, theme: body.themes?.[0] });
+          const durationMinutes = lengths.has(Number(body.durationMinutes)) ? Number(body.durationMinutes) : 5;
+          const id = randomUUID(); const contentVersion = `text-${hash(JSON.stringify(draft))}`;
+          return await client.query(`INSERT INTO family_stories(id,family_id,child_id,created_by,title,summary,stage,age_min,age_max,themes,paragraphs,duration_minutes,content_version)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+          [id, actor.familyId, childId, actor.userId, draft.title, draft.summary, draft.stage, draft.ageMin, draft.ageMax, draft.themes, JSON.stringify(draft.paragraphs), durationMinutes, contentVersion]);
+        });
         return sendJson(res, 201, { story: publicStory(result.rows[0]) });
       }
       const match = path.match(/^\/api\/stories\/family\/([0-9a-f-]{36})(?:\/(audio|publish|unpublish))?$/i);
@@ -281,16 +308,22 @@ export function createStoryService({ database, identity, usage, audioCache, stor
       }
       if (action === 'audio' && req.method === 'POST') {
         if (!['draft', 'failed', 'ready'].includes(story.status)) throw Object.assign(new Error('故事正在生成音频，请稍后查看'), { status: 409 });
-        const activeJob = await database.query("SELECT story_id FROM story_audio_jobs WHERE family_id=$1 AND story_id<>$2 AND status IN ('queued','processing') LIMIT 1", [actor.familyId, storyId]);
-        if (activeJob.rows[0]) throw Object.assign(new Error('家庭中已有故事正在配音，请完成后再生成下一篇'), { status: 409 });
+        await usage.assertPaid(actor);
+        await usage.rate(`story-audio:${actor.familyId}`, 3, 3600000);
         const jobId = randomUUID();
         await database.transaction(async client => {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext('lexue-story-queue'))");
+          await client.query('SELECT id FROM families WHERE id=$1 FOR UPDATE', [actor.familyId]);
+          const activeJob = await client.query("SELECT story_id FROM story_audio_jobs WHERE family_id=$1 AND status IN ('queued','processing') LIMIT 1", [actor.familyId]);
+          if (activeJob.rows[0]) throw Object.assign(new Error('家庭中已有故事正在配音，请稍后再试'), { status: 409 });
+          const queued = await client.query("SELECT count(*)::int total FROM story_audio_jobs WHERE status IN ('queued','processing')");
+          if (queued.rows[0].total >= 100) throw Object.assign(new Error('配音队列已满'), { status: 429 });
           await client.query(`INSERT INTO story_audio_jobs(id,story_id,family_id,requested_by,device_id,status,completed_sentences,total_sentences,last_error)
             VALUES($1,$2,$3,$4,$5,'queued',0,0,NULL) ON CONFLICT(story_id) DO UPDATE SET requested_by=EXCLUDED.requested_by,device_id=EXCLUDED.device_id,status='queued',completed_sentences=0,total_sentences=0,last_error=NULL,updated_at=now()`,
           [jobId, storyId, actor.familyId, actor.userId, actor.deviceId]);
           await client.query("UPDATE family_stories SET status='audio_queued',error_message=NULL,updated_at=now() WHERE id=$1", [storyId]);
         });
-        queue(storyId); return sendJson(res, 202, { queued: true });
+        void queue(); return sendJson(res, 202, { queued: true });
       }
       if (action === 'publish' && req.method === 'POST') {
         if (!story.audio_object_key || !['ready', 'published'].includes(story.status)) throw Object.assign(new Error('请先完成音频生成和试听'), { status: 409 });
@@ -302,8 +335,8 @@ export function createStoryService({ database, identity, usage, audioCache, stor
         return sendJson(res, 200, { published: false });
       }
       throw Object.assign(new Error('请求方式不支持'), { status: 405 });
-    } catch (error) { sendJson(res, Number(error?.status) || 500, { error: error instanceof Error ? error.message : '故事服务暂时不可用' }); }
+    } catch (error) { return apiError(res, error, '故事服务暂时不可用'); }
   };
 
-  return { handle, start, processAudio };
+  return { handle, start, processAudio, stop: () => clearInterval(polling) };
 }

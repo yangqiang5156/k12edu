@@ -1,21 +1,22 @@
-import { loadEnv } from 'vite';
+import { loadConfiguration } from './server/environment.mjs';
 import { createLocalServices } from './server/local-services.mjs';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(() => ({
+  envDir: false,
   base: './',
   plugins: [
     react(),
     {
       name: 'online-services',
       configureServer(server) {
-        const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
+        const env = loadConfiguration();
         server.middlewares.use(createLocalServices(env));
       },
       configurePreviewServer(server) {
-        const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
+        const env = loadConfiguration();
         server.middlewares.use(createLocalServices(env));
       },
     },

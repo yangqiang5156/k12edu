@@ -12,6 +12,7 @@ export function createStoryStorage(env = process.env) {
     accessKeySecret: env.OSS_ACCESS_KEY_SECRET,
     endpoint: env.OSS_ENDPOINT || undefined,
     secure: true,
+    timeout: 15000,
     // 浏览器必须获得外网地址。故事上传量不大，避免误签内网 URL。
     internal: env.OSS_STORY_INTERNAL === 'true',
   }) : undefined;
@@ -27,7 +28,7 @@ export function createStoryStorage(env = process.env) {
     if (!client) throw Object.assign(new Error('故事 OSS 尚未配置'), { status: 503 });
     await client.put(key, source, { headers: {
       'Content-Type': type,
-      'Cache-Control': 'public, max-age=31536000, immutable',
+      'Cache-Control': 'private, no-store',
     } });
     return key;
   };
@@ -36,7 +37,9 @@ export function createStoryStorage(env = process.env) {
   };
   const head = async (key) => {
     if (!client) throw Object.assign(new Error('故事 OSS 尚未配置'), { status: 503 });
-    return client.head(key);
+    // ObjectMeta返回对象原始大小，避免HeadObject压缩影响字节预算。
+    return client.getObjectMeta(key);
   };
-  return { enabled, prefix, builtInKey, familyKey, urlFor, put, remove, head };
+  const getStream = (key, options) => client.getStream(key, { ...options, timeout: 15000 });
+  return { getStream, enabled, prefix, builtInKey, familyKey, urlFor, put, remove, head };
 }

@@ -1,3 +1,4 @@
+import { createRateLimiter } from './rate-limit.mjs';
 import { randomUUID } from 'node:crypto';
 import { apiError, readJson, requestIp, sendJson } from './http.mjs';
 import { bearerToken, createAccessToken, hashPassword, verifyAccessToken, verifyPassword } from './security.mjs';
@@ -27,26 +28,31 @@ function publicChild(row) {
 
 export function createIdentityService(database, env = process.env) {
   const configuredSecret = env.SESSION_SECRET?.trim();
-  if (env.DATABASE_REQUIRED === 'true' && (!configuredSecret || configuredSecret.length < 32)) {
+  if ((database.configured || env.DATABASE_REQUIRED === 'true') && (!configuredSecret || configuredSecret.length < 32)) {
     throw new Error('生产环境必须配置至少32字符的 SESSION_SECRET');
   }
   const secret = configuredSecret || randomUUID() + randomUUID();
   if (!env.SESSION_SECRET) console.warn('未配置 SESSION_SECRET，本次重启后已有会话会失效');
-  const adminEmails = new Set(String(env.ADMIN_EMAILS || '').split(',').map((entry) => entry.trim().toLowerCase()).filter(Boolean));
-  const guestLifetime = Number(env.GUEST_SESSION_DAYS || 30) * 86400;
-  const accountLifetime = Number(env.ACCOUNT_SESSION_DAYS || 14) * 86400;
-  const authWindows = new Map();
-
-  const checkAuthRate = (req, action, limit) => {
-    const key = `${action}:${requestIp(req)}`;
-    const now = Date.now();
-    const current = authWindows.get(key);
-    const window = !current || now - current.startedAt >= 15 * 60_000 ? { startedAt: now, count: 0 } : current;
-    if (window.count >= limit) { const error = new Error('尝试次数较多，请15分钟后再试'); error.status = 429; throw error; }
-    window.count += 1; authWindows.set(key, window);
+  const guestLifetime = Math.min(30, Math.max(1, Number(env.GUEST_SESSION_DAYS || 7))) * 86400;
+  const accountLifetime = Math.min(30, Math.max(1, Number(env.ACCOUNT_SESSION_DAYS || 14))) * 86400;
+  const rate = createRateLimiter(database);
+  const sessions = new Map();
+  const checkAuthRate = (req, action, limit) => rate(`auth:${action}:${requestIp(req)}`, limit, 15 * 60_000);
+  const tokenFor = async (identity) => {
+    const lifetime = identity.type === 'account' ? accountLifetime : guestLifetime;
+    const sessionId = randomUUID();
+    const expires = new Date(Date.now() + lifetime * 1000);
+    if (database.configured) {
+      await database.query('DELETE FROM access_sessions WHERE expires_at<now()');
+      await database.query("DELETE FROM access_sessions WHERE id IN (SELECT id FROM access_sessions WHERE device_id=$1 ORDER BY expires_at DESC OFFSET 4)", [identity.deviceId]);
+      await database.query('INSERT INTO access_sessions(id,user_id,device_id,expires_at) VALUES($1,$2,$3,$4)', [sessionId, identity.userId || null, identity.deviceId, expires]);
+    } else {
+      for (const [id, end] of sessions) if (end < Date.now()) sessions.delete(id);
+      if (sessions.size >= 10000) throw Object.assign(new Error('会话数量达到上限'), { status: 429 });
+      sessions.set(sessionId, expires.getTime());
+    }
+    return createAccessToken({ ...identity, sessionId }, secret, lifetime);
   };
-
-  const tokenFor = (identity) => createAccessToken(identity, secret, identity.type === 'account' ? accountLifetime : guestLifetime);
 
   const authenticate = async (req, options = {}) => {
     const payload = verifyAccessToken(bearerToken(req), secret);
@@ -56,7 +62,13 @@ export function createIdentityService(database, env = process.env) {
     if (!options.allowGuest && payload.type !== 'account') {
       const error = new Error('请先登录家长账号'); error.status = 401; throw error;
     }
-    if (!database.configured) return payload;
+    if (!payload.sessionId) throw Object.assign(new Error('请重新登录'), { status: 401 });
+    if (!database.configured) {
+      if ((sessions.get(payload.sessionId) || 0) <= Date.now()) throw Object.assign(new Error('会话已失效'), { status: 401 });
+      return payload;
+    }
+    const session = await database.query('SELECT id FROM access_sessions WHERE id=$1 AND device_id=$2 AND user_id IS NOT DISTINCT FROM $3 AND expires_at>now()', [payload.sessionId, payload.deviceId, payload.userId || null]);
+    if (!session.rows[0]) throw Object.assign(new Error('会话已失效，请重新登录'), { status: 401 });
     const result = payload.type === 'account'
       ? await database.query(`SELECT u.id, u.family_id, u.email, u.is_admin, f.status family_status, d.status device_status
           FROM parent_users u JOIN families f ON f.id=u.family_id
@@ -66,7 +78,7 @@ export function createIdentityService(database, env = process.env) {
     if (!row || row.device_status === 'blocked' || row.family_status === 'blocked') {
       const error = new Error('当前账号或设备已停用'); error.status = 403; throw error;
     }
-    return { ...payload, isAdmin: Boolean(row.is_admin), familyId: row.family_id || payload.familyId };
+    return { ...payload, isAdmin: Boolean(row.is_admin), familyId: payload.type === 'account' ? row.family_id : undefined };
   };
 
   const registerDevice = async (deviceId, req, familyId = null) => {
@@ -81,7 +93,7 @@ export function createIdentityService(database, env = process.env) {
   const me = async (identity) => {
     if (identity.type !== 'account') return { authenticated: false, deviceId: identity.deviceId };
     const userResult = await database.query(`SELECT u.id, u.email, u.display_name, u.is_admin, f.id family_id, f.name family_name,
-      l.tts_daily_limit, l.ai_daily_limit FROM parent_users u JOIN families f ON f.id=u.family_id
+      f.paid_enabled, l.tts_daily_limit, l.ai_daily_limit FROM parent_users u JOIN families f ON f.id=u.family_id
       JOIN account_limits l ON l.family_id=f.id WHERE u.id=$1`, [identity.userId]);
     if (!userResult.rows[0]) { const error = new Error('账号不存在'); error.status = 401; throw error; }
     const row = userResult.rows[0];
@@ -89,7 +101,7 @@ export function createIdentityService(database, env = process.env) {
     return {
       authenticated: true,
       user: { id: row.id, email: row.email, displayName: row.display_name, isAdmin: row.is_admin },
-      family: { id: row.family_id, name: row.family_name },
+      family: { id: row.family_id, name: row.family_name, paidEnabled: row.paid_enabled },
       limits: { ttsDaily: row.tts_daily_limit, aiDaily: row.ai_daily_limit },
       children: children.rows.map(publicChild),
       deviceId: identity.deviceId,
@@ -102,15 +114,17 @@ export function createIdentityService(database, env = process.env) {
     if (!path.startsWith('/api/session') && !path.startsWith('/api/auth') && !path.startsWith('/api/children') && !path.startsWith('/api/sync') && !path.startsWith('/api/admin') && !path.startsWith('/api/account') && !path.startsWith('/api/content-packs')) return next();
     try {
       if (path === '/api/session/guest' && req.method === 'POST') {
-        checkAuthRate(req, 'guest', 120);
+        await checkAuthRate(req, 'guest', 120);
+        await rate('auth:global-guests', Number(env.GUEST_GLOBAL_DAILY_SESSION_LIMIT || 10000), 86400000);
         const body = await readJson(req, 4096);
         const deviceId = cleanText(body.deviceId, 100);
         await registerDevice(deviceId, req);
         const identity = { type: 'guest', deviceId };
-        return sendJson(res, 200, { token: tokenFor(identity), expiresIn: guestLifetime, identity });
+        return sendJson(res, 200, { token: await tokenFor(identity), expiresIn: guestLifetime, identity });
       }
       if (path === '/api/auth/register' && req.method === 'POST') {
-        checkAuthRate(req, 'register', 10);
+        await checkAuthRate(req, 'register', 10);
+        await rate('auth:global-register', Number(env.REGISTRATION_GLOBAL_DAILY_LIMIT || 200), 86400000);
         if (!database.configured) { const error = new Error('家庭账号服务尚未配置'); error.status = 503; throw error; }
         if (env.REGISTRATION_ENABLED === 'false') { const error = new Error('新账号注册暂未开放'); error.status = 403; throw error; }
         const body = await readJson(req, 16 * 1024);
@@ -127,7 +141,7 @@ export function createIdentityService(database, env = process.env) {
         try {
           await database.transaction(async (client) => {
             await client.query('INSERT INTO families(id,name) VALUES($1,$2)', [familyId, `${childName}的家庭`]);
-            await client.query('INSERT INTO parent_users(id,family_id,email,password_hash,display_name,is_admin) VALUES($1,$2,$3,$4,$5,$6)', [userId, familyId, email, passwordHash, displayName, adminEmails.has(email)]);
+            await client.query('INSERT INTO parent_users(id,family_id,email,password_hash,display_name,is_admin) VALUES($1,$2,$3,$4,$5,$6)', [userId, familyId, email, passwordHash, displayName, false]);
             await client.query('INSERT INTO children(id,family_id,name) VALUES($1,$2,$3)', [childId, familyId, childName]);
             await client.query('INSERT INTO account_limits(family_id,tts_daily_limit,ai_daily_limit) VALUES($1,$2,$3)', [familyId, Number(env.ACCOUNT_TTS_DAILY_LIMIT || 300), Number(env.ACCOUNT_AI_DAILY_LIMIT || 20)]);
             await client.query(`INSERT INTO devices(id,family_id,last_ip,user_agent) VALUES($1,$2,$3,$4)
@@ -138,10 +152,11 @@ export function createIdentityService(database, env = process.env) {
           throw error;
         }
         const identity = { type: 'account', userId, familyId, deviceId };
-        return sendJson(res, 201, { token: tokenFor(identity), expiresIn: accountLifetime, identity, childId, account: await me(identity) });
+        return sendJson(res, 201, { token: await tokenFor(identity), expiresIn: accountLifetime, identity, childId, account: await me(identity) });
       }
       if (path === '/api/auth/login' && req.method === 'POST') {
-        checkAuthRate(req, 'login', 20);
+        await checkAuthRate(req, 'login', 20);
+        await rate('auth:global-login', 120, 60000);
         const body = await readJson(req, 8192);
         const email = cleanText(body.email, 254).toLowerCase();
         const password = typeof body.password === 'string' ? body.password : '';
@@ -154,13 +169,18 @@ export function createIdentityService(database, env = process.env) {
         await registerDevice(deviceId, req, user.family_id);
         await database.query('UPDATE parent_users SET last_login_at=now() WHERE id=$1', [user.id]);
         const identity = { type: 'account', userId: user.id, familyId: user.family_id, deviceId };
-        return sendJson(res, 200, { token: tokenFor(identity), expiresIn: accountLifetime, identity, account: await me(identity) });
+        return sendJson(res, 200, { token: await tokenFor(identity), expiresIn: accountLifetime, identity, account: await me(identity) });
       }
       if (path === '/api/auth/me' && req.method === 'GET') {
         const identity = await authenticate(req, { allowGuest: true });
         return sendJson(res, 200, await me(identity));
       }
-      if (path === '/api/auth/logout' && req.method === 'POST') return sendJson(res, 200, { ok: true });
+      if (path === '/api/auth/logout' && req.method === 'POST') {
+        const actor = await authenticate(req, { allowGuest: true });
+        if (database.configured) await database.query('DELETE FROM access_sessions WHERE id=$1', [actor.sessionId]);
+        else sessions.delete(actor.sessionId);
+        return sendJson(res, 200, { ok: true });
+      }
 
       const publicPackMatch = path.match(/^\/api\/content-packs(?:\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+))?$/);
       if (publicPackMatch && req.method === 'GET') {
@@ -200,11 +220,17 @@ export function createIdentityService(database, env = process.env) {
         if (!name) { const error = new Error('请输入孩子昵称'); error.status = 400; throw error; }
         if (birthYear !== null && (!Number.isInteger(birthYear) || birthYear < 2010 || birthYear > new Date().getFullYear())) { const error = new Error('出生年份无效'); error.status = 400; throw error; }
         const id = randomUUID();
-        await database.query('INSERT INTO children(id,family_id,name,birth_year) VALUES($1,$2,$3,$4)', [id, identity.familyId, name, birthYear]);
+        await database.transaction(async client => {
+          await client.query('SELECT id FROM families WHERE id=$1 FOR UPDATE', [identity.familyId]);
+          const count = await client.query('SELECT count(*)::int total FROM children WHERE family_id=$1', [identity.familyId]);
+          if (count.rows[0].total >= 10) throw Object.assign(new Error('每个家庭最多创建10个孩子档案'), { status: 409 });
+          await client.query('INSERT INTO children(id,family_id,name,birth_year) VALUES($1,$2,$3,$4)', [id, identity.familyId, name, birthYear]);
+        });
         return sendJson(res, 201, { child: { id, name, birthYear } });
       }
       const syncMatch = path.match(/^\/api\/sync\/([0-9a-f-]{36})$/i);
       if (syncMatch) {
+        await rate(`sync:${identity.familyId}`, 60, 60_000);
         const childId = syncMatch[1];
         const child = await database.query('SELECT id FROM children WHERE id=$1 AND family_id=$2', [childId, identity.familyId]);
         if (!child.rows[0]) { const error = new Error('孩子档案不存在'); error.status = 404; throw error; }
@@ -245,13 +271,12 @@ export function createIdentityService(database, env = process.env) {
         return sendJson(res, 200, { families: families.rows[0], devices: devices.rows[0], usage7d: summary, estimatedCost7d, alerts: alerts.rows });
       }
       if (path === '/api/admin/families' && req.method === 'GET') {
-        const result = await database.query(`SELECT f.id,f.name,f.status,f.created_at,l.tts_daily_limit,l.ai_daily_limit,
-          count(DISTINCT c.id)::int children,count(DISTINCT d.id)::int devices,
-          COALESCE(sum(u.tts_requests) FILTER (WHERE u.usage_date=current_date),0)::bigint tts_today,
-          COALESCE(sum(u.ai_requests) FILTER (WHERE u.usage_date=current_date),0)::bigint ai_today
-          FROM families f JOIN account_limits l ON l.family_id=f.id LEFT JOIN children c ON c.family_id=f.id
-          LEFT JOIN devices d ON d.family_id=f.id LEFT JOIN usage_daily u ON u.family_id=f.id
-          GROUP BY f.id,l.family_id ORDER BY f.created_at DESC LIMIT 200`);
+        const result = await database.query(`SELECT f.id,f.name,f.status,f.paid_enabled,f.created_at,l.tts_daily_limit,l.ai_daily_limit,
+          (SELECT count(*)::int FROM children c WHERE c.family_id=f.id) children,
+          (SELECT count(*)::int FROM devices d WHERE d.family_id=f.id) devices,
+          COALESCE((SELECT sum(u.tts_requests) FROM usage_daily u WHERE u.family_id=f.id AND u.usage_date=(now() AT TIME ZONE 'UTC')::date),0)::bigint tts_today,
+          COALESCE((SELECT sum(u.ai_requests) FROM usage_daily u WHERE u.family_id=f.id AND u.usage_date=(now() AT TIME ZONE 'UTC')::date),0)::bigint ai_today
+          FROM families f JOIN account_limits l ON l.family_id=f.id ORDER BY f.created_at DESC LIMIT 200`);
         return sendJson(res, 200, { families: result.rows });
       }
       if (path === '/api/admin/content-packs' && req.method === 'GET') {
@@ -279,7 +304,10 @@ export function createIdentityService(database, env = process.env) {
         const body = await readJson(req, 4096);
         const familyId = familyMatch[1];
         if (body.status !== undefined && !['active', 'blocked'].includes(body.status)) { const error = new Error('账号状态无效'); error.status = 400; throw error; }
+        if (body.paidEnabled !== undefined && typeof body.paidEnabled !== 'boolean') throw Object.assign(new Error('生成权限格式无效'), { status: 400 });
+        for (const key of ['ttsDailyLimit', 'aiDailyLimit']) if (body[key] !== undefined && (!Number.isInteger(body[key]) || body[key] < 0 || body[key] > 10000)) throw Object.assign(new Error('额度需为0至10000的整数'), { status: 400 });
         await database.transaction(async (client) => {
+          if (body.paidEnabled !== undefined) await client.query('UPDATE families SET paid_enabled=$1,updated_at=now() WHERE id=$2', [body.paidEnabled, familyId]);
           if (body.status !== undefined) await client.query('UPDATE families SET status=$1,updated_at=now() WHERE id=$2', [body.status, familyId]);
           if (body.ttsDailyLimit !== undefined || body.aiDailyLimit !== undefined) await client.query(`UPDATE account_limits SET
             tts_daily_limit=COALESCE($1,tts_daily_limit),ai_daily_limit=COALESCE($2,ai_daily_limit),updated_at=now() WHERE family_id=$3`,

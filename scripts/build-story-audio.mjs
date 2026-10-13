@@ -1,3 +1,4 @@
+import '../server/load-env.mjs';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';

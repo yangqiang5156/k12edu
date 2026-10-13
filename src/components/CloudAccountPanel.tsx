@@ -48,6 +48,7 @@ function AdminConsole() {
     {overview?.alerts?.map(alert => <p className="admin-alert" key={alert.alert_key}>⚠️ {alert.message}</p>)}
     <div className="admin-family-list">{families.map(family => <article key={family.id}>
       <div><strong>{family.name}</strong><small>孩子 {family.children} · 设备 {family.devices} · 今日朗读 {family.tts_today} · AI {family.ai_today}</small></div>
+      <button onClick={() => void change(family, { paidEnabled: !family.paid_enabled })}>{family.paid_enabled ? '关闭在线生成' : '启用在线生成'}</button>
       <label>朗读/日<input type="number" min="0" defaultValue={family.tts_daily_limit} onBlur={event => void change(family, { ttsDailyLimit: Number(event.target.value) })} /></label>
       <label>AI/日<input type="number" min="0" defaultValue={family.ai_daily_limit} onBlur={event => void change(family, { aiDailyLimit: Number(event.target.value) })} /></label>
       <button className={family.status === 'blocked' ? 'approve' : 'delete'} onClick={() => void change(family, { status: family.status === 'blocked' ? 'active' : 'blocked' })}>{family.status === 'blocked' ? '恢复' : '停用'}</button>
@@ -146,7 +147,8 @@ export function CloudAccountPanel({ data, onRestore }: Props) {
   const activeChildId = currentCloudChildId();
   return <main className="parent-body">
     <section className="parent-card cloud-account-card">
-      <div className="cloud-account-title"><div><h2>{account.family?.name}</h2><p>{account.user?.email}</p></div><button onClick={async () => { await logoutFamily(); await refresh(); }}>退出</button></div>
+      <div className="cloud-account-title"><div><h2>{account.family?.name}</h2><p>{account.user?.email}</p></div><button onClick={async () => { try { await logoutFamily(); await refresh(); } catch (cause) { setStatus(cause instanceof Error ? cause.message : '退出失败，请重试'); } }}>退出</button></div>
+      {!account.family?.paidEnabled && <p>在线生成尚未启用，请联系管理员；已有资料、音频和家庭同步仍可使用。</p>}
       <p>在线朗读每日额度 {account.limits?.ttsDaily ?? '—'} 次，AI生成每日额度 {account.limits?.aiDaily ?? '—'} 次。</p>
       {status && <p className="cloud-status" role="status">{status}</p>}
     </section>
