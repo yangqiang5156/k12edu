@@ -23,9 +23,11 @@ CI=true pnpm preview
 
 构建产物位于 `dist/`，需要与 server/ 一起部署，或由静态站点反向代理 /api/tts 至语音服务。项目使用相对资源路径和 Hash 路由，部署在域名根目录或子目录均可使用。
 
+所有应用配置统一放在根目录 `.env`；开发、预览和脚本不再读取 `.env.local` 或模式专属配置。旧配置迁移和生产单文件部署见 [统一配置说明](docs/统一env配置.md)。
+
 ## Docker 与自动发布
 
-本项目支持 Docker 部署。推送 `vX.Y.Z` 版本标签后，GitHub Actions 会自动测试、构建并推送 GHCR 灾备镜像，创建 GitHub Release，再将压缩镜像通过 SSH 直接传送并导入阿里云；生产机无需跨境拉取 GHCR。新容器健康检查失败时会恢复上一镜像。
+本项目支持 Docker 部署。推送 `vX.Y.Z` 版本标签后，GitHub Actions 会自动测试、构建并推送 GHCR 灾备镜像，创建 GitHub Release，再通过 SSH 上传轻量应用代码包。阿里云复用本机缓存的 Node.js、FFmpeg 和运行依赖环境，在本机离线生成版本镜像；只有首次部署或环境标识变化时才上传运行环境镜像，生产机无需跨境拉取 GHCR。新容器启动或健康检查失败时会恢复上一镜像。
 
 服务器参数、GitHub Secrets、首次发布、回滚和客户端缓存更新策略见 [自动发布与阿里云部署](docs/自动发布与阿里云部署.md)。
 
@@ -35,7 +37,7 @@ PostgreSQL、家庭账号、接口额度、运营后台和阿里云 OSS 语音�
 
 ```bash
 docker build -t lexue:local .
-docker run --rm --env-file .env -e PORT=80 -p 8080:80 lexue:local
+docker run --rm -v "$PWD/.env:/app/.env:ro" -e PORT=80 -p 8080:80 lexue:local
 ```
 
 ## 手机安装

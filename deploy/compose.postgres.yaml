@@ -3,6 +3,13 @@ services:
     image: postgres:17-alpine
     container_name: lexue-postgres
     restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-lexue}
       POSTGRES_USER: ${POSTGRES_USER:-lexue}
@@ -19,24 +26,32 @@ services:
   lexue:
     image: ${LEXUE_IMAGE:?请设置 LEXUE_IMAGE}
     container_name: lexue
+    command: ["node", "--env-file=/app/.env", "server/index.mjs"]
     restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     depends_on:
       postgres:
         condition: service_healthy
-    env_file:
-      - path: .env.runtime
-        required: true
-      - path: .env.tts
-        required: false
     environment:
       PORT: 80
-      DATABASE_URL: postgresql://${POSTGRES_USER:-lexue}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-lexue}
-      DATABASE_REQUIRED: "true"
-      TTS_CACHE_DIR: /app/data/tts-cache
+      # 也覆盖旧镜像内置默认值，回滚时仍以同一个.env为准。
+      TTS_CACHE_DIR: ${TTS_CACHE_DIR:-/app/data/tts-cache}
     ports:
       - "127.0.0.1:${LEXUE_PORT:-8080}:80"
     volumes:
       - ./data:/app/data
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
       interval: 10s

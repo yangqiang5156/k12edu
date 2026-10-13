@@ -12,9 +12,28 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      security-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: lexue_security_test
+          POSTGRES_DB: lexue_security_test
+          POSTGRES_PASSWORD: security-test-password
+        ports: ["55439:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lexue_security_test -d lexue_security_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 安装固定版本凭据扫描器
+        run: sh scripts/install-security-scanner.sh
+
+      - name: 扫描全部可达历史和当前公开文件
+        run: node scripts/security-scan.mjs
 
       - name: 设置 Node.js
         uses: actions/setup-node@v6
@@ -28,11 +47,18 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 运行测试
+      - name: 运行测试（含真实数据库并发）
+        env:
+          SECURITY_TEST_DATABASE_URL: postgresql://lexue_security_test:security-test-password@127.0.0.1:55439/lexue_security_test
         run: pnpm test
 
       - name: 生产构建
         run: pnpm build
 
       - name: 验证容器构建
-        run: docker build --tag lexue:ci .
+        run: |
+          docker build --tag lexue:ci .
+          docker build --file deploy/Dockerfile.environment --tag lexue:runtime-ci .
+          docker build --network none --pull=false --file deploy/Dockerfile.app \
+            --build-arg LEXUE_RUNTIME_IMAGE=lexue:runtime-ci --tag lexue:app-ci .
+          node scripts/release-package.mjs package "v$(node -p "require('./package.json').version")" deploy-app

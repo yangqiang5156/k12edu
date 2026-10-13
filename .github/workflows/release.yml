@@ -16,11 +16,32 @@ concurrency:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    services:
+      security-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: lexue_security_test
+          POSTGRES_DB: lexue_security_test
+          POSTGRES_PASSWORD: security-test-password
+        ports: ["55439:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lexue_security_test -d lexue_security_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     outputs:
       image: ${{ steps.image.outputs.value }}
+      runtime_image: ${{ steps.image.outputs.runtime_image }}
+      runtime_key: ${{ steps.image.outputs.runtime_key }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 安装固定版本凭据扫描器
+        run: sh scripts/install-security-scanner.sh
+
+      - name: 扫描全部可达历史和当前公开文件
+        run: node scripts/security-scan.mjs
 
       - name: 设置 Node.js
         uses: actions/setup-node@v6
@@ -35,6 +56,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: 测试并构建
+        env:
+          SECURITY_TEST_DATABASE_URL: postgresql://lexue_security_test:security-test-password@127.0.0.1:55439/lexue_security_test
         run: |
           pnpm test
           pnpm build
@@ -42,7 +65,12 @@ jobs:
       - name: 计算镜像名称
         id: image
         shell: bash
-        run: echo "value=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+        run: |
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          runtime_key="$(node scripts/release-package.mjs runtime-key)"
+          echo "value=$repository:$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          echo "runtime_key=$runtime_key" >> "$GITHUB_OUTPUT"
+          echo "runtime_image=$repository:runtime-$runtime_key" >> "$GITHUB_OUTPUT"
 
       - name: 登录 GitHub 容器仓库
         env:
@@ -51,27 +79,31 @@ jobs:
 
       - name: 构建并推送不可变版本镜像
         shell: bash
+        env:
+          LEXUE_RUNTIME_IMAGE: ${{ steps.image.outputs.runtime_image }}
         run: |
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker build --pull --file deploy/Dockerfile.runtime --tag "$repository:$GITHUB_REF_NAME" --tag "$repository:latest" .
+          if ! docker pull "$LEXUE_RUNTIME_IMAGE"; then
+            docker build --platform linux/amd64 --pull --file deploy/Dockerfile.environment --tag "$LEXUE_RUNTIME_IMAGE" .
+            docker push "$LEXUE_RUNTIME_IMAGE"
+          fi
+          docker build --platform linux/amd64 --pull=false --file deploy/Dockerfile.app \
+            --build-arg "LEXUE_RUNTIME_IMAGE=$LEXUE_RUNTIME_IMAGE" \
+            --tag "$repository:$GITHUB_REF_NAME" --tag "$repository:latest" .
           docker push "$repository:$GITHUB_REF_NAME"
           docker push "$repository:latest"
 
-      - name: 打包生产部署镜像
+      - name: 打包轻量应用代码
         shell: bash
-        run: |
-          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          archive="lexue-image-${GITHUB_REF_NAME}.tar.gz"
-          docker save "$repository:$GITHUB_REF_NAME" | gzip -1 > "$archive"
-          sha256sum "$archive" > "$archive.sha256"
+        run: node scripts/release-package.mjs package "$GITHUB_REF_NAME" deploy-app
 
-      - name: 暂存生产部署镜像
+      - name: 暂存轻量应用代码
         uses: actions/upload-artifact@v4
         with:
-          name: production-image-${{ github.ref_name }}
+          name: production-app-${{ github.ref_name }}
           path: |
-            lexue-image-${{ github.ref_name }}.tar.gz
-            lexue-image-${{ github.ref_name }}.tar.gz.sha256
+            deploy-app/lexue-app-${{ github.ref_name }}.tar.gz
+            deploy-app/lexue-app-${{ github.ref_name }}.tar.gz.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -97,11 +129,11 @@ jobs:
       - name: 检出部署脚本
         uses: actions/checkout@v6
 
-      - name: 下载生产部署镜像
+      - name: 下载轻量应用代码
         uses: actions/download-artifact@v4
         with:
-          name: production-image-${{ github.ref_name }}
-          path: deploy-image
+          name: production-app-${{ github.ref_name }}
+          path: deploy-app
 
       - name: 校验部署参数
         env:
@@ -133,21 +165,35 @@ jobs:
           ALIYUN_USER: ${{ secrets.ALIYUN_USER }}
           ALIYUN_SSH_PORT: ${{ secrets.ALIYUN_SSH_PORT }}
           ALIYUN_DEPLOY_PATH: ${{ secrets.ALIYUN_DEPLOY_PATH }}
-          ALIYUN_APP_PORT: ${{ secrets.ALIYUN_APP_PORT }}
           LEXUE_IMAGE: ${{ needs.build-and-publish.outputs.image }}
+          LEXUE_RUNTIME_IMAGE: ${{ needs.build-and-publish.outputs.runtime_image }}
+          LEXUE_RUNTIME_KEY: ${{ needs.build-and-publish.outputs.runtime_key }}
+          GHCR_TOKEN: ${{ github.token }}
         run: |
           ssh_port="${ALIYUN_SSH_PORT:-22}"
           deploy_path="${ALIYUN_DEPLOY_PATH:-lexue}"
-          app_port="${ALIYUN_APP_PORT:-8080}"
           ssh_target="$ALIYUN_USER@$ALIYUN_HOST"
           ssh_args=(-i ~/.ssh/aliyun_deploy -p "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 
           [[ "$deploy_path" =~ ^[A-Za-z0-9_./-]+$ ]] && [[ "$deploy_path" != *".."* ]]
-          image_archive="lexue-image-${GITHUB_REF_NAME}.tar.gz"
+          app_archive="lexue-app-${GITHUB_REF_NAME}.tar.gz"
           ssh "${ssh_args[@]}" "$ssh_target" "mkdir -p '$deploy_path'"
-          scp -i ~/.ssh/aliyun_deploy -P "$ssh_port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o Compression=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-            deploy/compose.yaml deploy/remote-deploy.sh \
-            "deploy-image/$image_archive" "deploy-image/$image_archive.sha256" \
-            "$ssh_target:$deploy_path/"
+          runtime_state="$(ssh "${ssh_args[@]}" "$ssh_target" "if docker image inspect '$LEXUE_RUNTIME_IMAGE' >/dev/null 2>&1; then printf found; else printf missing; fi")"
+          runtime_archive=""
+          if [ "$runtime_state" = missing ]; then
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+            docker pull "$LEXUE_RUNTIME_IMAGE"
+            runtime_archive="lexue-runtime-${LEXUE_RUNTIME_KEY}.tar.gz"
+            docker save "$LEXUE_RUNTIME_IMAGE" | gzip -1 > "$runtime_archive"
+            sha256sum "$runtime_archive" > "$runtime_archive.sha256"
+            tar -cf - "$runtime_archive" "$runtime_archive.sha256" | \
+              ssh "${ssh_args[@]}" "$ssh_target" "tar -xf - -C '$deploy_path'"
+          elif [ "$runtime_state" != found ]; then
+            echo '无法确定服务器运行环境状态' >&2
+            exit 1
+          fi
+          tar -cf - -C "$GITHUB_WORKSPACE/deploy" compose.yaml compose.postgres-only.yaml remote-deploy.sh env-config.mjs \
+            -C "$GITHUB_WORKSPACE/deploy-app" "$app_archive" "$app_archive.sha256" | \
+            ssh "${ssh_args[@]}" "$ssh_target" "tar -xf - -C '$deploy_path'"
           ssh "${ssh_args[@]}" "$ssh_target" \
-            "cd '$deploy_path' && chmod 700 remote-deploy.sh && LEXUE_IMAGE='$LEXUE_IMAGE' LEXUE_IMAGE_ARCHIVE='$image_archive' LEXUE_PORT='$app_port' ./remote-deploy.sh"
+            "cd '$deploy_path' && chmod 700 remote-deploy.sh && LEXUE_IMAGE='$LEXUE_IMAGE' LEXUE_APP_ARCHIVE='$app_archive' LEXUE_RUNTIME_IMAGE='$LEXUE_RUNTIME_IMAGE' LEXUE_RUNTIME_ARCHIVE='$runtime_archive' ./remote-deploy.sh"

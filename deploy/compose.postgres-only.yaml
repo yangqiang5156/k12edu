@@ -3,13 +3,14 @@ services:
     image: postgres:17-alpine
     container_name: lexue-postgres
     restart: unless-stopped
-    env_file:
-      - path: .env.postgres
-        required: true
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lexue}
+      POSTGRES_USER: ${POSTGRES_USER:-lexue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在.env设置POSTGRES_PASSWORD}
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lexue -d lexue"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lexue} -d ${POSTGRES_DB:-lexue}"]
       interval: 10s
       timeout: 5s
       retries: 10

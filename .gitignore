@@ -3,6 +3,7 @@ dist/
 .DS_Store
 .pnpm-store/
 release/
+deploy-app/
 *.local
 .env
 .env.*
@@ -14,3 +15,8 @@ public/stories/*.mp3
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+
+# 本地运行缓存和审计/截图输出不进入开源仓库
+.cache/
+.playwright-mcp/
+output/
