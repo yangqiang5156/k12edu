@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { speak, stopSpeech, speechError } from '../audio';
+import { speak, stopSpeech, speechError, DeviceSpeechRequiredError } from '../audio';
 import { numberSpeechText, numberToChinese, numberToEnglish, type NumberAudioLanguage } from '../logic';
 
 const decorations = ['🐼', '🚗', '🦖', '🚀', '🐳', '🌈', '🦊', '⚽', '🐯', '🎈', '🐙', '🦁'];
@@ -8,6 +8,7 @@ const accents = ['#745fd7', '#e97083', '#43a785', '#e59b30', '#4e98cc', '#9a65c7
 export function NumberLab({ soundEnabled }: { soundEnabled: boolean }) {
   const readJob = useRef(0);
   const [number, setNumber] = useState(0);
+  const [deviceRead, setDeviceRead] = useState(false);
   const [reading, setReading] = useState(false);
   const [status, setStatus] = useState('点数字听在线中英文朗读');
   const [celebration, setCelebration] = useState(0);
@@ -25,11 +26,12 @@ export function NumberLab({ soundEnabled }: { soundEnabled: boolean }) {
     setReading(true);
     setStatus(language === 'zh' ? '正在读中文…' : language === 'en' ? 'Reading in English…' : '正在读中文和英文…');
     try {
-      await speak(numberSpeechText(value, language), true, language === 'both' ? 'auto' : language);
+      await speak(numberSpeechText(value, language), true, language === 'both' ? 'auto' : language, undefined, deviceRead);
       if (job !== readJob.current) return;
       setStatus('读完啦，再点一次可以重听');
     } catch (error) {
       if (job !== readJob.current) return;
+      if (error instanceof DeviceSpeechRequiredError) setDeviceRead(true);
       setStatus(speechError(error));
     } finally {
       if (job === readJob.current) setReading(false);
@@ -48,7 +50,7 @@ export function NumberLab({ soundEnabled }: { soundEnabled: boolean }) {
     <div className="number-lab" style={{ '--number-accent': accents[Math.floor(number / 50) % accents.length] } as React.CSSProperties}>
       <div className="number-lab-heading">
         <span className="eyebrow">0–1000 数字探索</span>
-        <span className="online-audio-badge">● 在线朗读</span>
+        <span className="online-audio-badge">● {deviceRead ? '设备朗读' : '在线朗读'}</span>
       </div>
       <button className="number-stage" onClick={() => void read()} aria-label={`朗读数字 ${number}`}>
         <span className="number-decoration">{decorations[number % decorations.length]}</span>

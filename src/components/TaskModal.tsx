@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { speak, speakMultilingualSequence, speakSequence, stopSpeech, speechError } from '../audio';
+import { speak, speakMultilingualSequence, speakSequence, stopSpeech, speechError, DeviceSpeechRequiredError } from '../audio';
 import { MODULE_META, type LearningAction, type LearningEvent, type LearningOutcome, type DailyModuleTask } from '../types';
 import { TraceCanvas } from './TraceCanvas';
 import { NumberLab } from './NumberLab';
@@ -27,6 +27,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
   const [showLab, setShowLab] = useState(false);
   const [audioStatus, setAudioStatus] = useState('');
   const [audioPlaying, setAudioPlaying] = useState(false);
+  const [deviceRead, setDeviceRead] = useState(false);
   const [activeScienceSection, setActiveScienceSection] = useState<number | null>(null);
   const item = task.items[index];
   const isDone = task.doneItemIds.includes(item.id);
@@ -89,23 +90,26 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     const speechRequest = lessonSpeechRequest(item, lessonDetail);
     setAudioPlaying(true);
     setActiveScienceSection(null);
-    setAudioStatus('正在准备在线朗读…');
+    setAudioStatus(deviceRead ? '正在启动设备朗读…' : '正在准备在线朗读…');
+    const onSegmentChange = (section: number | null) => {
+      if (job !== readJob.current) return;
+      if (item.kind === 'science') setActiveScienceSection(section);
+      if (section !== null) setAudioStatus('正在朗读…');
+    };
     try {
       if (speechRequest.multilingualSegments?.length) {
-        await speakMultilingualSequence(speechRequest.multilingualSegments, true, speechRequest.pauseMs);
+        await speakMultilingualSequence(speechRequest.multilingualSegments, true, speechRequest.pauseMs, onSegmentChange, deviceRead);
       } else if (speechRequest.segments?.length) {
-        await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs, section => {
-          if (job === readJob.current && item.kind === 'science') {
-            setActiveScienceSection(section);
-            if (section !== null) setAudioStatus('正在朗读科学讲解…');
-          }
-        });
+        await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs, onSegmentChange, deviceRead);
       } else {
-        await speak(speechRequest.text, true, speechRequest.language);
+        await speak(speechRequest.text, true, speechRequest.language, onSegmentChange, deviceRead);
       }
       if (job === readJob.current) setAudioStatus('朗读完成，再点一次可以重听');
     } catch (error) {
-      if (job === readJob.current) setAudioStatus(speechError(error));
+      if (job === readJob.current) {
+        if (error instanceof DeviceSpeechRequiredError) setDeviceRead(true);
+        setAudioStatus(speechError(error));
+      }
     } finally {
       if (job === readJob.current) {
         setAudioPlaying(false);
@@ -150,7 +154,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
               {hasLessonAudio && <>
                 <button className={`lesson-audio-button ${audioPlaying ? 'is-speaking' : ''}`} onClick={() => void readItem()} disabled={audioPlaying}>
                   <span aria-hidden="true">🔊</span>
-                  <strong>{audioPlaying ? '正在朗读…' : audioButtonLabel}</strong>
+                  <strong>{audioPlaying ? '正在朗读…' : deviceRead ? '使用设备朗读' : audioButtonLabel}</strong>
                 </button>
                 <div className="lesson-audio-status" role="status">{audioStatus}</div>
               </>}

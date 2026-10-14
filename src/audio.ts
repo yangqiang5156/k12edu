@@ -19,6 +19,21 @@ export function playClick(enabled: boolean): void {
 let cancelCurrent: (() => void) | undefined;
 
 class SpeechQuotaError extends Error {}
+export class DeviceSpeechRequiredError extends Error {
+  constructor() { super('未能启动朗读，请点“使用设备朗读”重试'); }
+}
+
+// 网络请求、缓存和浏览器播放事件都可能不返回；取消必须立即结束等待。
+function bounded<T>(work: Promise<T>, signal: AbortSignal, milliseconds: number, error: Error): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => finish(() => reject(signal.reason ?? new DOMException('朗读已取消', 'AbortError')));
+    const timer = setTimeout(() => finish(() => reject(error)), milliseconds);
+    const finish = (settle: () => void) => { clearTimeout(timer); signal.removeEventListener('abort', abort); settle(); };
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+    work.then(value => finish(() => resolve(value)), reason => finish(() => reject(reason)));
+  });
+}
 
 async function audioCacheKey(text: string, language: string) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ version: 1, text, language })));
@@ -30,8 +45,10 @@ async function speechBlob(text: string, language: string, signal: AbortSignal): 
   const key = supportsCache ? await audioCacheKey(text, language) : '';
   const request = supportsCache ? new Request(`${location.origin}${import.meta.env.BASE_URL}__audio-cache/${key}`) : undefined;
   if (request) {
-    const cached = await (await caches.open('lexue-tts-v1')).match(request);
-    if (cached) return cached.blob();
+    try {
+      const cached = await (await caches.open('lexue-tts-v1')).match(request);
+      if (cached) return cached.blob();
+    } catch { /* 隐私模式下缓存不可用，仍可请求在线朗读。 */ }
   }
   const response = await authorizedFetch(`${import.meta.env.BASE_URL}api/tts`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -44,8 +61,7 @@ async function speechBlob(text: string, language: string, signal: AbortSignal): 
   }
   const blob = await response.blob();
   if (request) {
-    const cache = await caches.open('lexue-tts-v1');
-    await cache.put(request, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' } })).catch(() => undefined);
+    void caches.open('lexue-tts-v1').then(cache => cache.put(request, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' } }))).catch(() => undefined);
   }
   return blob;
 }
@@ -59,7 +75,7 @@ export interface SpeechSegment { text: string; language: 'auto' | 'zh' | 'en' }
 
 export type SpeechSegmentChange = (index: number | null) => void;
 
-async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: number, onSegmentChange?: SpeechSegmentChange): Promise<void> {
+async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: number, onSegmentChange?: SpeechSegmentChange, deviceOnly = false): Promise<void> {
   stopSpeech();
   const parts = segments.map((part) => ({ ...part, text: part.text.trim() })).filter(part => Boolean(part.text));
   if (!enabled || !parts.length) return;
@@ -69,6 +85,7 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
   const activeAudio = new Audio();
   const objectUrls: string[] = [];
   let rejectPlayback: ((reason: unknown) => void) | undefined;
+  let playbackStartTimer: ReturnType<typeof setTimeout> | undefined;
   let rejectPause: ((reason: unknown) => void) | undefined;
   let pauseTimer: ReturnType<typeof setTimeout> | undefined;
   const abortError = () => new DOMException('朗读已取消', 'AbortError');
@@ -84,28 +101,53 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
   try {
     let urls: string[];
     try {
+      if (deviceOnly) throw new SpeechQuotaError();
       urls = [];
       // 分段逐个准备，避免科学四段同时请求超过语音服务的并发上限。
       for (const { text, language } of parts) {
         controller.signal.throwIfAborted();
-        const blob = await speechBlob(text, language, controller.signal);
+        const blob = await bounded(speechBlob(text, language, controller.signal), controller.signal, 50000, new DeviceSpeechRequiredError());
         controller.signal.throwIfAborted();
         const url = URL.createObjectURL(blob);
         objectUrls.push(url);
         urls.push(url);
       }
     } catch (error) {
-      if (!(error instanceof SpeechQuotaError) || !globalThis.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') throw error;
+      if (!(error instanceof SpeechQuotaError)) throw error;
+      if (!globalThis.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') throw new Error('此浏览器不支持设备朗读，请换用系统浏览器');
       for (const [index, { text, language }] of parts.entries()) {
         controller.signal.throwIfAborted();
-        await new Promise<void>((resolve, reject) => {
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.lang = language === 'en' ? 'en-US' : 'zh-CN'; utterance.rate = 0.85;
-          utterance.onstart = () => { if (!controller.signal.aborted) onSegmentChange?.(index); };
-          utterance.onend = () => resolve(); utterance.onerror = event => reject(new Error(event.error === 'canceled' ? '朗读已取消' : '设备朗读失败'));
-          controller.signal.addEventListener('abort', () => { globalThis.speechSynthesis.cancel(); reject(abortError()); }, { once: true });
-          globalThis.speechSynthesis.speak(utterance);
-        });
+        const utterance = new SpeechSynthesisUtterance(text);
+        try {
+          await new Promise<void>((resolve, reject) => {
+            let timer: ReturnType<typeof setTimeout>;
+            const finish = (error?: Error) => {
+              clearTimeout(timer);
+              controller.signal.removeEventListener('abort', abort);
+              utterance.onstart = utterance.onend = utterance.onerror = null;
+              error ? reject(error) : resolve();
+            };
+            const abort = () => finish(abortError());
+            timer = setTimeout(() => finish(new DeviceSpeechRequiredError()), 4000);
+            utterance.lang = language === 'en' ? 'en-US' : 'zh-CN'; utterance.rate = 0.85;
+            utterance.onstart = () => {
+              clearTimeout(timer);
+              timer = setTimeout(() => finish(new Error('设备朗读中断，请重试')), Math.max(30000, text.length * 1000));
+              if (!controller.signal.aborted) onSegmentChange?.(index);
+            };
+            utterance.onend = () => finish();
+            utterance.onerror = () => finish(new DeviceSpeechRequiredError());
+            controller.signal.addEventListener('abort', abort, { once: true });
+            try {
+              // deviceOnly 从点击处理函数同步到达此处，保留浏览器要求的用户操作。
+              globalThis.speechSynthesis.speak(utterance);
+              globalThis.speechSynthesis.resume?.();
+            } catch { finish(new DeviceSpeechRequiredError()); }
+          });
+        } catch (error) {
+          if (cancelCurrent === cancel) globalThis.speechSynthesis.cancel();
+          throw error;
+        }
         onSegmentChange?.(null);
         if (index < parts.length - 1) await new Promise<void>((resolve, reject) => {
           rejectPause = reject;
@@ -119,15 +161,20 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
       controller.signal.throwIfAborted();
       activeAudio.src = url;
       try {
-        await new Promise<void>((resolve, reject) => {
+        await bounded(new Promise<void>((resolve, reject) => {
           rejectPlayback = reject;
-          activeAudio.onplaying = () => { if (!controller.signal.aborted) onSegmentChange?.(index); };
+          playbackStartTimer = setTimeout(() => reject(new DeviceSpeechRequiredError()), 4000);
+          activeAudio.onplaying = () => {
+            clearTimeout(playbackStartTimer);
+            if (!controller.signal.aborted) onSegmentChange?.(index);
+          };
           activeAudio.onpause = () => onSegmentChange?.(null);
           activeAudio.onended = () => resolve();
           activeAudio.onerror = () => reject(new Error('音频播放失败，请重试'));
-          activeAudio.play().catch(reject);
-        });
+          activeAudio.play().catch(error => reject(error?.name === 'NotAllowedError' ? new DeviceSpeechRequiredError() : error));
+        }), controller.signal, Math.max(30000, parts[index].text.length * 1000), new DeviceSpeechRequiredError());
       } finally {
+        clearTimeout(playbackStartTimer);
         rejectPlayback = undefined;
         activeAudio.pause();
         activeAudio.onended = null;
@@ -146,6 +193,8 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
       });
     }
   } finally {
+    controller.abort();
+    clearTimeout(playbackStartTimer);
     if (pauseTimer !== undefined) globalThis.clearTimeout(pauseTimer);
     activeAudio.pause();
     activeAudio.onended = null;
@@ -159,16 +208,16 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
   }
 }
 
-export async function speak(text: string, enabled: boolean, language: SpeechSegment['language'] = 'auto'): Promise<void> {
-  return runSpeech([{ text, language }], enabled, 0);
+export async function speak(text: string, enabled: boolean, language: SpeechSegment['language'] = 'auto', onSegmentChange?: SpeechSegmentChange, deviceOnly = false): Promise<void> {
+  return runSpeech([{ text, language }], enabled, 0, onSegmentChange, deviceOnly);
 }
 
-export async function speakSequence(segments: string[], enabled: boolean, language: SpeechSegment['language'] = 'auto', pauseMs = 1000, onSegmentChange?: SpeechSegmentChange): Promise<void> {
-  return runSpeech(segments.map(text => ({ text, language })), enabled, pauseMs, onSegmentChange);
+export async function speakSequence(segments: string[], enabled: boolean, language: SpeechSegment['language'] = 'auto', pauseMs = 1000, onSegmentChange?: SpeechSegmentChange, deviceOnly = false): Promise<void> {
+  return runSpeech(segments.map(text => ({ text, language })), enabled, pauseMs, onSegmentChange, deviceOnly);
 }
 
-export async function speakMultilingualSequence(segments: SpeechSegment[], enabled: boolean, pauseMs = 1000): Promise<void> {
-  return runSpeech(segments, enabled, pauseMs);
+export async function speakMultilingualSequence(segments: SpeechSegment[], enabled: boolean, pauseMs = 1000, onSegmentChange?: SpeechSegmentChange, deviceOnly = false): Promise<void> {
+  return runSpeech(segments, enabled, pauseMs, onSegmentChange, deviceOnly);
 }
 
 export function speechError(error: unknown): string {

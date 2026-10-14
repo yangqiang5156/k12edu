@@ -164,4 +164,68 @@ describe('在线朗读生命周期', () => {
     await job;
     expect(change).toHaveBeenLastCalledWith(null);
   });
+  it('设备回退没有任何事件时结束等待，下一次点击可直接启动设备朗读', async () => {
+    setup(); vi.useFakeTimers();
+    class FakeUtterance { onstart?: () => void; onend?: () => void; constructor(public text: string) {} }
+    const device = { cancel: vi.fn(), speak: vi.fn() };
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance);
+    vi.stubGlobal('speechSynthesis', device);
+    const request = vi.fn().mockResolvedValue(new Response('{}', { status: 403 }));
+    vi.stubGlobal('fetch', request);
+    const first = speak('你好', true);
+    const rejected = expect(first).rejects.toThrow('使用设备朗读');
+    await vi.waitFor(() => expect(device.speak).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(4000);
+    await rejected;
+    expect(device.cancel).toHaveBeenCalled();
+    const retry = speak('你好', true, 'zh', undefined, true);
+    // 必须同步调用，不能先发网络请求或等待 Promise，才能保留点击授权。
+    expect(device.speak).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
+    const utterance = device.speak.mock.calls[1][0] as FakeUtterance;
+    utterance.onstart?.(); utterance.onend?.();
+    await retry;
+  });
+  it('接口不响应时超时并取消请求，按钮不会无限等待', async () => {
+    setup(); vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal('fetch', vi.fn((_url, init) => { signal = init.signal; return new Promise(() => {}); }));
+    const job = speak('你好', true);
+    const rejected = expect(job).rejects.toThrow('使用设备朗读');
+    await vi.advanceTimersByTimeAsync(50000);
+    await rejected;
+    expect(signal?.aborted).toBe(true);
+  });
+  it('网络等待期间取消也立即完成，不依赖请求返回', async () => {
+    setup(); vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    const job = speak('你好', true);
+    const rejected = expect(job).rejects.toMatchObject({ name: 'AbortError' });
+    stopSpeech(); await rejected;
+  });
+  it('音频未开始播放时超时释放资源', async () => {
+    setup(); vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('audio')));
+    const job = speak('你好', true);
+    const rejected = expect(job).rejects.toThrow('使用设备朗读');
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(4000); await rejected;
+    expect(URL.revokeObjectURL).toHaveBeenCalled();
+    expect(FakeAudio.last.onplaying).toBeNull();
+  });
+  it('单段和双语朗读都能报告实际开始状态', async () => {
+    setup(); vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('audio')));
+    const change = vi.fn();
+    const first = speak('你好', true, 'zh', change);
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalled());
+    FakeAudio.last.onplaying?.(); expect(change).toHaveBeenLastCalledWith(0);
+    FakeAudio.last.onended?.(); await first;
+    const second = speakMultilingualSequence([{ text: 'apple', language: 'en' }, { text: '苹果', language: 'zh' }], true, 1000, change);
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalled());
+    FakeAudio.last.onplaying?.(); expect(change).toHaveBeenLastCalledWith(0);
+    FakeAudio.last.onended?.(); await vi.advanceTimersByTimeAsync(1000);
+    FakeAudio.last.onplaying?.(); expect(change).toHaveBeenLastCalledWith(1);
+    FakeAudio.last.onended?.(); await second;
+  });
+
 });

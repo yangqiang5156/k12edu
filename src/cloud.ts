@@ -24,30 +24,32 @@ function deviceId() {
 
 function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
 
-async function guestSession() {
+async function guestSession(signal?: AbortSignal | null) {
   const response = await fetch(api('/session/guest'), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceId: deviceId() }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deviceId: deviceId() }), signal,
   });
   const data = await response.json().catch(() => ({}));
+  signal?.throwIfAborted();
   if (!response.ok || !data.token) throw new Error(data.error || '无法建立安全访问会话');
   localStorage.setItem(TOKEN_KEY, data.token);
   return data.token as string;
 }
 
-export async function ensureSession() {
+export async function ensureSession(signal?: AbortSignal | null) {
   if (import.meta.env.MODE === 'test') return '';
-  return token() || guestSession();
+  signal?.throwIfAborted();
+  return token() || guestSession(signal);
 }
 
 export async function authorizedFetch(input: RequestInfo | URL, init: RequestInit = {}, retry = true): Promise<Response> {
   if (import.meta.env.MODE === 'test') return fetch(input, init);
-  const accessToken = await ensureSession();
+  const accessToken = await ensureSession(init.signal);
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${accessToken}`);
   const response = await fetch(input, { ...init, headers });
   if (response.status === 401 && retry) {
     localStorage.removeItem(TOKEN_KEY);
-    await guestSession();
+    await guestSession(init.signal);
     return authorizedFetch(input, init, false);
   }
   return response;
