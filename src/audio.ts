@@ -20,7 +20,25 @@ let cancelCurrent: (() => void) | undefined;
 
 class SpeechQuotaError extends Error {}
 export class DeviceSpeechRequiredError extends Error {
-  constructor() { super('未能启动朗读，请点“使用设备朗读”重试'); }
+  constructor(reason = '在线朗读暂不可用') { super(`${reason}；请点“使用设备朗读”`); }
+}
+
+export class OnlinePlaybackRequiredError extends Error {
+  constructor() { super('在线语音已准备好，请再点一次播放在线语音'); }
+}
+let preparedOnline: { key: string; blobs: Blob[]; expires: number } | undefined;
+
+function prepareAudioSession() {
+  // 新版 Safari 可显式使用媒体播放会话；旧浏览器不支持时保持默认行为。
+  if (typeof navigator === 'undefined') return;
+  const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+  try { if (session) session.type = 'playback'; } catch { /* 系统可能不允许修改会话。 */ }
+}
+
+function deviceSpeechError(code?: string) {
+  if (code === 'language-unavailable' || code === 'voice-unavailable') return new Error('设备缺少此语言的朗读声音，请在 iPhone 设置 → 辅助功能 → 朗读内容 → 声音中下载中文或英文声音');
+  if (code === 'not-allowed') return new Error('设备朗读被系统阻止，请用 Safari 打开并点击朗读；也请检查静音开关与媒体音量');
+  return new Error('设备朗读未能启动，请检查静音开关、媒体音量及系统朗读声音，或改用在线朗读');
 }
 
 // 网络请求、缓存和浏览器播放事件都可能不返回；取消必须立即结束等待。
@@ -67,6 +85,7 @@ async function speechBlob(text: string, language: string, signal: AbortSignal): 
 }
 
 export function stopSpeech(): void {
+  preparedOnline = undefined;
   cancelCurrent?.();
   cancelCurrent = undefined;
 }
@@ -76,9 +95,15 @@ export interface SpeechSegment { text: string; language: 'auto' | 'zh' | 'en' }
 export type SpeechSegmentChange = (index: number | null) => void;
 
 async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: number, onSegmentChange?: SpeechSegmentChange, deviceOnly = false): Promise<void> {
+  const retryPrepared = preparedOnline;
   stopSpeech();
   const parts = segments.map((part) => ({ ...part, text: part.text.trim() })).filter(part => Boolean(part.text));
   if (!enabled || !parts.length) return;
+  prepareAudioSession();
+  const key = JSON.stringify(parts);
+  const prepared = !deviceOnly && retryPrepared?.key === key && retryPrepared.expires > Date.now() ? retryPrepared.blobs : undefined;
+  preparedOnline = undefined;
+  const blobs: Blob[] = [];
   const controller = new AbortController();
   // iOS 会把每个新的 Audio 元素视为一次新的播放请求。整次朗读只创建
   // 一个播放器并反复更换音源，既保留媒体播放通道，也避免第二段被拦截。
@@ -106,7 +131,8 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
       // 分段逐个准备，避免科学四段同时请求超过语音服务的并发上限。
       for (const { text, language } of parts) {
         controller.signal.throwIfAborted();
-        const blob = await bounded(speechBlob(text, language, controller.signal), controller.signal, 50000, new DeviceSpeechRequiredError());
+        const blob = prepared ? prepared[blobs.length] : await bounded(speechBlob(text, language, controller.signal), controller.signal, 50000, new Error('在线语音准备超时，请检查网络后重试'));
+        blobs.push(blob);
         controller.signal.throwIfAborted();
         const url = URL.createObjectURL(blob);
         objectUrls.push(url);
@@ -114,12 +140,18 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
       }
     } catch (error) {
       if (!(error instanceof SpeechQuotaError)) throw error;
+      // 付费权限不足时，下一次点击同步启动设备朗读，避免丢失 iOS 用户操作。
+      if (!deviceOnly) throw new DeviceSpeechRequiredError(error.message || '在线生成尚未开通或额度已用完');
       if (!globalThis.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') throw new Error('此浏览器不支持设备朗读，请换用系统浏览器');
+      const synthesis = globalThis.speechSynthesis;
+      synthesis.cancel();
+      if (synthesis.paused) synthesis.resume();
       for (const [index, { text, language }] of parts.entries()) {
         controller.signal.throwIfAborted();
         const utterance = new SpeechSynthesisUtterance(text);
         try {
           await new Promise<void>((resolve, reject) => {
+            let started = false;
             let timer: ReturnType<typeof setTimeout>;
             const finish = (error?: Error) => {
               clearTimeout(timer);
@@ -128,21 +160,26 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
               error ? reject(error) : resolve();
             };
             const abort = () => finish(abortError());
-            timer = setTimeout(() => finish(new DeviceSpeechRequiredError()), 4000);
-            utterance.lang = language === 'en' ? 'en-US' : 'zh-CN'; utterance.rate = 0.85;
+            timer = setTimeout(() => finish(deviceSpeechError()), 8000);
+            const english = language === 'en' || (language === 'auto' && /[a-z]/i.test(text) && !/[\u4e00-\u9fff]/.test(text));
+            utterance.lang = english ? 'en-US' : 'zh-CN'; utterance.rate = 0.85; utterance.volume = 1;
+            const voices = synthesis.getVoices?.() ?? [];
+            const voice = voices.find(voice => voice.lang.toLowerCase() === utterance.lang.toLowerCase())
+              ?? voices.find(voice => voice.lang.toLowerCase().startsWith(english ? 'en' : 'zh'));
+            if (voice) utterance.voice = voice;
             utterance.onstart = () => {
+              started = true;
               clearTimeout(timer);
               timer = setTimeout(() => finish(new Error('设备朗读中断，请重试')), Math.max(30000, text.length * 1000));
               if (!controller.signal.aborted) onSegmentChange?.(index);
             };
-            utterance.onend = () => finish();
-            utterance.onerror = () => finish(new DeviceSpeechRequiredError());
+            utterance.onend = () => finish(started ? undefined : deviceSpeechError());
+            utterance.onerror = event => finish(deviceSpeechError(event.error));
             controller.signal.addEventListener('abort', abort, { once: true });
             try {
               // deviceOnly 从点击处理函数同步到达此处，保留浏览器要求的用户操作。
-              globalThis.speechSynthesis.speak(utterance);
-              globalThis.speechSynthesis.resume?.();
-            } catch { finish(new DeviceSpeechRequiredError()); }
+              synthesis.speak(utterance);
+            } catch { finish(deviceSpeechError()); }
           });
         } catch (error) {
           if (cancelCurrent === cancel) globalThis.speechSynthesis.cancel();
@@ -163,7 +200,7 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
       try {
         await bounded(new Promise<void>((resolve, reject) => {
           rejectPlayback = reject;
-          playbackStartTimer = setTimeout(() => reject(new DeviceSpeechRequiredError()), 4000);
+          playbackStartTimer = setTimeout(() => reject(new OnlinePlaybackRequiredError()), 8000);
           activeAudio.onplaying = () => {
             clearTimeout(playbackStartTimer);
             if (!controller.signal.aborted) onSegmentChange?.(index);
@@ -171,8 +208,13 @@ async function runSpeech(segments: SpeechSegment[], enabled: boolean, pauseMs: n
           activeAudio.onpause = () => onSegmentChange?.(null);
           activeAudio.onended = () => resolve();
           activeAudio.onerror = () => reject(new Error('音频播放失败，请重试'));
-          activeAudio.play().catch(error => reject(error?.name === 'NotAllowedError' ? new DeviceSpeechRequiredError() : error));
-        }), controller.signal, Math.max(30000, parts[index].text.length * 1000), new DeviceSpeechRequiredError());
+          activeAudio.play().catch(error => reject(error?.name === 'NotAllowedError' ? new OnlinePlaybackRequiredError() : error));
+        }), controller.signal, Math.max(30000, parts[index].text.length * 1000), new Error('在线音频播放中断，请重试'));
+      } catch (error) {
+        if (error instanceof OnlinePlaybackRequiredError && blobs.reduce((bytes, blob) => bytes + blob.size, 0) <= 25 * 1024 * 1024) {
+          preparedOnline = { key, blobs, expires: Date.now() + 120000 };
+        }
+        throw error;
       } finally {
         clearTimeout(playbackStartTimer);
         rejectPlayback = undefined;

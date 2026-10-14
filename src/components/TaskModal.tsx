@@ -58,6 +58,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     readJob.current += 1;
     stopSpeech();
     setAudioStatus('');
+    setDeviceRead(false);
     setAudioPlaying(false);
     setActiveScienceSection(null);
     setFeedback('');
@@ -104,7 +105,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
       } else {
         await speak(speechRequest.text, true, speechRequest.language, onSegmentChange, deviceRead);
       }
-      if (job === readJob.current) setAudioStatus('朗读完成，再点一次可以重听');
+      if (job === readJob.current) setAudioStatus(deviceRead ? '设备朗读结束；若没有声音，请检查静音开关与媒体音量，或切换在线朗读' : '朗读完成，再点一次可以重听');
     } catch (error) {
       if (job === readJob.current) {
         if (error instanceof DeviceSpeechRequiredError) setDeviceRead(true);
@@ -157,6 +158,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
                   <strong>{audioPlaying ? '正在朗读…' : deviceRead ? '使用设备朗读' : audioButtonLabel}</strong>
                 </button>
                 <div className="lesson-audio-status" role="status">{audioStatus}</div>
+                {!audioPlaying && <button className="text-button" onClick={() => { setDeviceRead(!deviceRead); setAudioStatus(deviceRead ? '已切换在线朗读，请点击上方播放' : '已切换设备朗读，请点击上方播放；无声时请检查静音开关和媒体音量'); }}>{deviceRead ? '切换在线朗读' : '改用设备朗读'}</button>}
               </>}
               {item.options?.length ? <div className="answer-grid">{item.options.map((option) => <button key={option} disabled={saving || isDone} onClick={() => choose(option)}>{option}</button>)}</div> : null}
             </>}

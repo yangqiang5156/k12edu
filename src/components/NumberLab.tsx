@@ -73,6 +73,7 @@ export function NumberLab({ soundEnabled }: { soundEnabled: boolean }) {
         <button onClick={() => selectNumber(Math.floor(Math.random() * 1001), true)}>🎲 随机</button>
       </div>
       <div className="number-status" role="status">{status}</div>
+      {!reading && <button onClick={() => { setDeviceRead(!deviceRead); setStatus('已切换朗读方式，请点数字播放'); }}>{deviceRead ? '切换在线朗读' : '改用设备朗读'}</button>}
       {celebration > 0 && <div className="number-celebration" key={celebration} aria-hidden="true">{Array.from({ length: 12 }, (_, index) => <i key={index} style={{ left: `${5 + index * 8}%`, animationDelay: `${index * 30}ms`, '--star-rise': `${-90 + index % 3 * 45}px` } as React.CSSProperties}>⭐</i>)}</div>}
     </div>
   );

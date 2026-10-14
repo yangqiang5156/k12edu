@@ -68,19 +68,13 @@ describe('在线朗读生命周期', () => {
     setup(); vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: '语音服务尚未配置' }), { status: 503 })));
     await expect(speak('你好', true)).rejects.toThrow('语音服务尚未配置');
   });
-  it.each([403, 429])('云语音未启用或额度用完时使用设备自带朗读（%s）', async status => {
+  it.each([403, 429])('云语音未启用或限额时保留原因，并要求点击后启动设备朗读（%s）', async status => {
     setup();
-    class FakeUtterance {
-      text: string; lang = ''; rate = 1; onend?: () => void; onerror?: (event: { error: string }) => void;
-      constructor(text: string) { this.text = text; }
-    }
-    const deviceSpeech = { cancel: vi.fn(), speak: vi.fn((utterance: FakeUtterance) => queueMicrotask(() => utterance.onend?.())) };
-    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance);
-    vi.stubGlobal('speechSynthesis', deviceSpeech);
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: '千问免费语音额度已用完' }), { status })));
-    await speak('春眠不觉晓。', true, 'zh');
-    expect(deviceSpeech.speak).toHaveBeenCalledTimes(1);
-    expect(deviceSpeech.speak.mock.calls[0][0]).toMatchObject({ text: '春眠不觉晓。', lang: 'zh-CN', rate: 0.85 });
+    const device = { cancel: vi.fn(), speak: vi.fn() };
+    vi.stubGlobal('speechSynthesis', device);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: '家庭账号尚未启用在线生成' }), { status })));
+    await expect(speak('春眠不觉晓。', true, 'zh')).rejects.toThrow('家庭账号尚未启用在线生成');
+    expect(device.speak).not.toHaveBeenCalled();
   });
   it('分段朗读复用同一播放器，并在相邻内容之间至少停顿1秒', async () => {
     setup();
@@ -155,7 +149,7 @@ describe('在线朗读生命周期', () => {
     vi.stubGlobal('speechSynthesis', { cancel: vi.fn(), speak: vi.fn((value: FakeUtterance) => { utterance = value; }) });
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(JSON.stringify({ error: '免费语音额度已用完' }), { status: 429 })));
     const change = vi.fn();
-    const job = speakSequence(['科学问题'], true, 'zh', 1000, change);
+    const job = speakSequence(['科学问题'], true, 'zh', 1000, change, true);
     await vi.waitFor(() => expect(utterance).toBeDefined());
     expect(change).not.toHaveBeenCalled();
     utterance?.onstart?.();
@@ -164,34 +158,23 @@ describe('在线朗读生命周期', () => {
     await job;
     expect(change).toHaveBeenLastCalledWith(null);
   });
-  it('设备回退没有任何事件时结束等待，下一次点击可直接启动设备朗读', async () => {
+  it('设备朗读没有事件时提示系统设置问题，不虚报成功', async () => {
     setup(); vi.useFakeTimers();
-    class FakeUtterance { onstart?: () => void; onend?: () => void; constructor(public text: string) {} }
-    const device = { cancel: vi.fn(), speak: vi.fn() };
+    class FakeUtterance { constructor(public text: string) {} }
     vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance);
+    const device = { cancel: vi.fn(), speak: vi.fn() };
     vi.stubGlobal('speechSynthesis', device);
-    const request = vi.fn().mockResolvedValue(new Response('{}', { status: 403 }));
-    vi.stubGlobal('fetch', request);
-    const first = speak('你好', true);
-    const rejected = expect(first).rejects.toThrow('使用设备朗读');
-    await vi.waitFor(() => expect(device.speak).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(4000);
-    await rejected;
-    expect(device.cancel).toHaveBeenCalled();
-    const retry = speak('你好', true, 'zh', undefined, true);
-    // 必须同步调用，不能先发网络请求或等待 Promise，才能保留点击授权。
-    expect(device.speak).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledOnce();
-    const utterance = device.speak.mock.calls[1][0] as FakeUtterance;
-    utterance.onstart?.(); utterance.onend?.();
-    await retry;
+    const job = speak('设备无事件', true, 'zh', undefined, true);
+    const rejected = expect(job).rejects.toThrow('静音开关');
+    expect(device.speak).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(8000); await rejected;
   });
   it('接口不响应时超时并取消请求，按钮不会无限等待', async () => {
     setup(); vi.useFakeTimers();
     let signal: AbortSignal | undefined;
     vi.stubGlobal('fetch', vi.fn((_url, init) => { signal = init.signal; return new Promise(() => {}); }));
     const job = speak('你好', true);
-    const rejected = expect(job).rejects.toThrow('使用设备朗读');
+    const rejected = expect(job).rejects.toThrow('准备超时');
     await vi.advanceTimersByTimeAsync(50000);
     await rejected;
     expect(signal?.aborted).toBe(true);
@@ -206,9 +189,9 @@ describe('在线朗读生命周期', () => {
     setup(); vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('audio')));
     const job = speak('你好', true);
-    const rejected = expect(job).rejects.toThrow('使用设备朗读');
+    const rejected = expect(job).rejects.toThrow('再点一次播放在线语音');
     await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalled());
-    await vi.advanceTimersByTimeAsync(4000); await rejected;
+    await vi.advanceTimersByTimeAsync(8000); await rejected;
     expect(URL.revokeObjectURL).toHaveBeenCalled();
     expect(FakeAudio.last.onplaying).toBeNull();
   });
@@ -226,6 +209,56 @@ describe('在线朗读生命周期', () => {
     FakeAudio.last.onended?.(); await vi.advanceTimersByTimeAsync(1000);
     FakeAudio.last.onplaying?.(); expect(change).toHaveBeenLastCalledWith(1);
     FakeAudio.last.onended?.(); await second;
+  });
+
+  it('iOS 拒绝异步播放时保留在线音频，再次点击同步播放且不重复生成', async () => {
+    setup();
+    const request = vi.fn().mockResolvedValue(new Response('audio'));
+    vi.stubGlobal('fetch', request);
+    const first = speak('在线重试测试', true, 'zh');
+    const rejected = expect(first).rejects.toThrow('再点一次播放在线语音');
+    FakeAudio.last.play.mockRejectedValueOnce(new DOMException('blocked', 'NotAllowedError'));
+    await rejected;
+    const second = speak('在线重试测试', true, 'zh');
+    expect(FakeAudio.last.play).toHaveBeenCalledOnce(); // 再次点击同步到达 play。
+    expect(request).toHaveBeenCalledOnce();
+    FakeAudio.last.onplaying?.(); FakeAudio.last.onended?.(); await second;
+  });
+
+  it('设备朗读同步选择语言声音并恢复暂停的语音引擎', async () => {
+    setup();
+    class FakeUtterance { onstart?: () => void; onend?: () => void; constructor(public text: string) {} }
+    const english = { lang: 'en-US', name: 'English' };
+    const chinese = { lang: 'zh-CN', name: '中文' };
+    const device = { paused: true, cancel: vi.fn(), resume: vi.fn(), getVoices: vi.fn(() => [english, chinese]), speak: vi.fn() };
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance); vi.stubGlobal('speechSynthesis', device);
+    const job = speak('apple', true, 'auto', undefined, true);
+    expect(device.speak).toHaveBeenCalledOnce();
+    expect(device.resume).toHaveBeenCalledOnce();
+    const utterance = device.speak.mock.calls[0][0] as FakeUtterance;
+    expect(utterance).toMatchObject({ lang: 'en-US', voice: english });
+    utterance.onstart?.(); utterance.onend?.(); await job;
+  });
+  it('只收到设备结束事件但没有开始事件时不显示朗读成功', async () => {
+    setup();
+    class FakeUtterance { onend?: () => void; constructor(public text: string) {} }
+    const device = { cancel: vi.fn(), speak: vi.fn() };
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance); vi.stubGlobal('speechSynthesis', device);
+    const job = speak('未开始朗读', true, 'zh', undefined, true);
+    const rejected = expect(job).rejects.toThrow('设备朗读未能启动');
+    (device.speak.mock.calls[0][0] as FakeUtterance).onend?.(); await rejected;
+  });
+  it('支持音频会话的 iOS 使用媒体播放模式，声音错误保留可操作提示', async () => {
+    setup();
+    const audioSession = { type: 'auto' };
+    vi.stubGlobal('navigator', { audioSession });
+    class FakeUtterance { onerror?: (event: { error: string }) => void; constructor(public text: string) {} }
+    const device = { cancel: vi.fn(), speak: vi.fn() };
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance); vi.stubGlobal('speechSynthesis', device);
+    const job = speak('声音测试', true, 'zh', undefined, true);
+    const rejected = expect(job).rejects.toThrow('下载中文或英文声音');
+    expect(audioSession.type).toBe('playback');
+    (device.speak.mock.calls[0][0] as FakeUtterance).onerror?.({ error: 'voice-unavailable' }); await rejected;
   });
 
 });
