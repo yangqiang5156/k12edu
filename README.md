@@ -118,3 +118,9 @@ docker run --rm -v "$PWD/.env:/app/.env:ro" -e PORT=80 -p 8080:80 lexue:local
 家长登录后可在“家长中心 → 故事”输入主题，通过 DeepSeek 生成原创故事草稿。草稿不会自动发布；家长检查并保存后可启动后台配音，系统逐句使用已配置的 TTS 模型生成音频、合并 MP3、记录高亮时间点，并保存到 `lexue/stories/families/<family-id>/` 私有目录。家长试听并手动发布后，对应孩子才能在故事屋看到。
 
 重新制作内置音频可运行 `node --env-file=.env scripts/build-story-audio.mjs`，随后运行标准化、发布校验与 `pnpm stories:upload`。音频制作文件保存在忽略的 `.cache/story-production/`，不会重新进入应用包。方案与内容规则见 [故事屋 MVP 产品方案](docs/故事屋MVP产品方案.md)。
+
+## 许可证
+
+本项目原创代码采用 [Apache License 2.0](LICENSE) 许可。第三方依赖、引用资料及另有声明的素材仍遵循各自的许可证或授权；本许可证不改变其权利归属，也不授予第三方语音或大模型服务的使用权限。
+
+公开仓库前的 OSS 凭据更换步骤见 [阿里云 OSS 密钥轮换操作指南](docs/阿里云OSS密钥轮换操作指南.md)。

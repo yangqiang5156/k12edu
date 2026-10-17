@@ -23,7 +23,7 @@ export function packageRelease(root, version, outputDirectory) {
   const filename = `lexue-app-${version}.tar.gz`;
   const archive = resolve(outputDirectory, filename);
   // 白名单打包，不包含 .env、学习数据、node_modules 或 OSS 音频。
-  execFileSync('tar', ['-czf', archive, '-C', root, 'package.json', 'server', 'dist', 'deploy/Dockerfile.app']);
+  execFileSync('tar', ['-czf', archive, '-C', root, 'package.json', 'LICENSE', 'server', 'dist', 'deploy/Dockerfile.app']);
   const bytes = readFileSync(archive);
   writeFileSync(`${archive}.sha256`, `${createHash('sha256').update(bytes).digest('hex')}  ${filename}\n`);
   return { archive, bytes: bytes.length, runtimeKey: runtimeKey(root) };

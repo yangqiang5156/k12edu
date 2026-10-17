@@ -18,6 +18,7 @@ function fixture() {
   writeFileSync(join(root, 'deploy/Dockerfile.app'), 'ARG LEXUE_RUNTIME_IMAGE\nFROM ${LEXUE_RUNTIME_IMAGE}\n');
   writeFileSync(join(root, 'server/index.mjs'), 'console.log("应用");');
   writeFileSync(join(root, 'dist/index.html'), '<h1>乐学</h1>');
+  writeFileSync(join(root, 'LICENSE'), 'Apache License, Version 2.0');
   writeFileSync(join(root, '.env'), 'SECRET=private');
   writeFileSync(join(root, 'data/story.mp3'), 'private audio');
   writeFileSync(join(root, 'node_modules/unwanted'), 'dependency');
@@ -42,6 +43,8 @@ describe('轻量发布包与环境标识', () => {
     const { archive } = packageRelease(root, 'v0.11.0', output);
     const files = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' });
     expect(files).toContain('dist/index.html'); expect(files).toContain('server/index.mjs');
+    expect(files.split('\n')).toContain('LICENSE');
+    expect(execFileSync('tar', ['-xOzf', archive, 'LICENSE'], { encoding: 'utf8' })).toBe('Apache License, Version 2.0');
     expect(files).not.toContain('.env'); expect(files).not.toContain('node_modules'); expect(files).not.toContain('story.mp3');
     execFileSync('shasum', ['-a', '256', '-c', `${archive}.sha256`], { cwd: output });
     expect(() => packageRelease(root, 'v0.12.0', output)).toThrow('版本不一致');
