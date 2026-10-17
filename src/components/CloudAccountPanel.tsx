@@ -47,7 +47,11 @@ function AdminConsole() {
     </div>}
     {overview?.alerts?.map(alert => <p className="admin-alert" key={alert.alert_key}>⚠️ {alert.message}</p>)}
     <div className="admin-family-list">{families.map(family => <article key={family.id}>
-      <div><strong>{family.name}</strong><small>孩子 {family.children} · 设备 {family.devices} · 今日朗读 {family.tts_today} · AI {family.ai_today}</small></div>
+      <div>
+        <strong>{family.name}</strong>
+        <small className="admin-family-email">注册邮箱：{family.registration_email || '暂无注册邮箱'}</small>
+        <small>孩子 {family.children} · 设备 {family.devices} · 今日朗读 {family.tts_today} · AI {family.ai_today}</small>
+      </div>
       <button onClick={() => void change(family, { paidEnabled: !family.paid_enabled })}>{family.paid_enabled ? '关闭在线生成' : '启用在线生成'}</button>
       <label>朗读/日<input type="number" min="0" defaultValue={family.tts_daily_limit} onBlur={event => void change(family, { ttsDailyLimit: Number(event.target.value) })} /></label>
       <label>AI/日<input type="number" min="0" defaultValue={family.ai_daily_limit} onBlur={event => void change(family, { aiDailyLimit: Number(event.target.value) })} /></label>

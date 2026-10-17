@@ -42,6 +42,18 @@ suite('真实PostgreSQL安全集成（独立临时数据库）', () => {
     await expect(usage.assertPaid(actor)).rejects.toMatchObject({ status: 403 });
     expect((await call(identity.handle, '/api/admin/families', undefined, token)).status).toBe(403);
   });
+  it('家庭注册邮箱仅管理员可查询，撤销管理员权限后立即拒绝访问', async () => {
+    const denied = await call(identity.handle, '/api/admin/families', undefined, token);
+    expect(denied.status).toBe(403);
+    expect(JSON.stringify(denied.data)).not.toContain('admin@example.test');
+    await db.query('UPDATE parent_users SET is_admin=true WHERE id=$1', [actor.userId]);
+    const result = await call(identity.handle, '/api/admin/families', undefined, token);
+    expect(result.status).toBe(200);
+    expect(result.data.families).toHaveLength(1);
+    expect(result.data.families[0]).toMatchObject({ id: actor.familyId, registration_email: 'admin@example.test' });
+    await db.query('UPDATE parent_users SET is_admin=false WHERE id=$1', [actor.userId]);
+    expect((await call(identity.handle, '/api/admin/families', undefined, token)).status).toBe(403);
+  });
   it('两套服务并发争抢每日最后一次额度仅一个通过', async () => {
     await db.query('UPDATE account_limits SET tts_daily_limit=1');
     const first = createUsageService(db, identity, env), second = createUsageService(db, identity, env);

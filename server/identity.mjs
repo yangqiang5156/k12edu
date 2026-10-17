@@ -272,6 +272,7 @@ export function createIdentityService(database, env = process.env) {
       }
       if (path === '/api/admin/families' && req.method === 'GET') {
         const result = await database.query(`SELECT f.id,f.name,f.status,f.paid_enabled,f.created_at,l.tts_daily_limit,l.ai_daily_limit,
+          (SELECT p.email FROM parent_users p WHERE p.family_id=f.id ORDER BY p.created_at,p.id LIMIT 1) registration_email,
           (SELECT count(*)::int FROM children c WHERE c.family_id=f.id) children,
           (SELECT count(*)::int FROM devices d WHERE d.family_id=f.id) devices,
           COALESCE((SELECT sum(u.tts_requests) FROM usage_daily u WHERE u.family_id=f.id AND u.usage_date=(now() AT TIME ZONE 'UTC')::date),0)::bigint tts_today,

@@ -147,6 +147,7 @@ export interface AdminOverview {
 }
 export interface AdminFamily {
   id: string; name: string; paid_enabled: boolean; status: 'active' | 'blocked'; created_at: string;
+  registration_email: string | null;
   tts_daily_limit: number; ai_daily_limit: number; children: number; devices: number; tts_today: string; ai_today: string;
 }
 export const loadAdminOverview = () => jsonRequest<AdminOverview>('/admin/overview');
