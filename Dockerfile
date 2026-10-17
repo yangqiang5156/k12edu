@@ -7,7 +7,7 @@ RUN corepack enable && corepack prepare pnpm@10.15.1 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-COPY index.html tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts ./
+COPY LICENSE index.html tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
 COPY server ./server
@@ -17,6 +17,7 @@ FROM node:22-alpine
 WORKDIR /app
 RUN apk add --no-cache ffmpeg
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/LICENSE ./LICENSE
 COPY --from=builder /app/node_modules ./node_modules
 COPY server ./server
 COPY --from=builder /app/dist ./dist
