@@ -14,7 +14,7 @@ class FakeAudio {
   removeAttribute = vi.fn();
   constructor() { FakeAudio.last = this; FakeAudio.instances.push(this); }
 }
-afterEach(() => { stopSpeech(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { stopSpeech(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 function setup() {
   FakeAudio.instances = [];
   vi.stubGlobal('Audio', FakeAudio);
@@ -261,4 +261,25 @@ describe('在线朗读生命周期', () => {
     (device.speak.mock.calls[0][0] as FakeUtterance).onerror?.({ error: 'voice-unavailable' }); await rejected;
   });
 
+});
+
+describe('在线朗读缓存地址', () => {
+  it.each([
+    ['./', 'http://127.0.0.1:8082/#/home', 'http://127.0.0.1:8082/__audio-cache/'],
+    ['/', 'http://127.0.0.1:8082/#/home', 'http://127.0.0.1:8082/__audio-cache/'],
+    ['./', 'https://example.com/lexue/#/home', 'https://example.com/lexue/__audio-cache/'],
+    ['/lexue/', 'https://example.com/lexue/#/home', 'https://example.com/lexue/__audio-cache/'],
+  ])('在构建路径%s和页面%s下可直接播放缓存音频', async (base, href, expected) => {
+    setup();
+    vi.stubEnv('BASE_URL', base);
+    vi.stubGlobal('location', new URL(href));
+    const match = vi.fn().mockResolvedValue(new Response('cached-audio'));
+    vi.stubGlobal('caches', { open: vi.fn().mockResolvedValue({ match }) });
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const job = speak('缓存地址回归验证', true);
+    await vi.waitFor(() => expect(FakeAudio.last.play).toHaveBeenCalled());
+    expect(match.mock.calls[0][0].url).toMatch(new RegExp('^' + expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[a-f0-9]{64}$'));
+    expect(fetch).not.toHaveBeenCalled();
+    FakeAudio.last.onended?.(); await job;
+  });
 });

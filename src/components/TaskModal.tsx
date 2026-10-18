@@ -4,6 +4,8 @@ import { MODULE_META, type LearningAction, type LearningEvent, type LearningOutc
 import { TraceCanvas } from './TraceCanvas';
 import { NumberLab } from './NumberLab';
 import { lessonSpeechRequest } from '../lesson-speech';
+import { SpeechInfo } from './SpeechInfo';
+import { useSpeechAccount } from '../use-speech-account';
 import { scienceLesson } from '../science-lesson';
 
 interface Props {
@@ -15,6 +17,7 @@ interface Props {
 }
 
 export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: Props) {
+  const authenticated = useSpeechAccount();
   const readJob = useRef(0);
   const savingRef = useRef(false);
   const [saving, setSaving] = useState(false);
@@ -28,6 +31,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
   const [audioStatus, setAudioStatus] = useState('');
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [deviceRead, setDeviceRead] = useState(false);
+  const useDeviceRead = !authenticated || deviceRead;
   const [activeScienceSection, setActiveScienceSection] = useState<number | null>(null);
   const item = task.items[index];
   const isDone = task.doneItemIds.includes(item.id);
@@ -91,7 +95,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     const speechRequest = lessonSpeechRequest(item, lessonDetail);
     setAudioPlaying(true);
     setActiveScienceSection(null);
-    setAudioStatus(deviceRead ? '正在启动设备朗读…' : '正在准备在线朗读…');
+    setAudioStatus(useDeviceRead ? '正在启动设备朗读…' : '正在准备在线朗读…');
     const onSegmentChange = (section: number | null) => {
       if (job !== readJob.current) return;
       if (item.kind === 'science') setActiveScienceSection(section);
@@ -99,13 +103,13 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
     };
     try {
       if (speechRequest.multilingualSegments?.length) {
-        await speakMultilingualSequence(speechRequest.multilingualSegments, true, speechRequest.pauseMs, onSegmentChange, deviceRead);
+        await speakMultilingualSequence(speechRequest.multilingualSegments, true, speechRequest.pauseMs, onSegmentChange, useDeviceRead);
       } else if (speechRequest.segments?.length) {
-        await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs, onSegmentChange, deviceRead);
+        await speakSequence(speechRequest.segments, true, speechRequest.language, speechRequest.pauseMs, onSegmentChange, useDeviceRead);
       } else {
-        await speak(speechRequest.text, true, speechRequest.language, onSegmentChange, deviceRead);
+        await speak(speechRequest.text, true, speechRequest.language, onSegmentChange, useDeviceRead);
       }
-      if (job === readJob.current) setAudioStatus(deviceRead ? '设备朗读结束；若没有声音，请检查静音开关与媒体音量，或切换在线朗读' : '朗读完成，再点一次可以重听');
+      if (job === readJob.current) setAudioStatus('朗读完成，再点一次可以重听');
     } catch (error) {
       if (job === readJob.current) {
         if (error instanceof DeviceSpeechRequiredError) setDeviceRead(true);
@@ -129,7 +133,7 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
         </header>
         <div className="step-dots">{task.items.map((entry, step) => <i key={entry.id} className={task.doneItemIds.includes(entry.id) ? 'done' : step === index ? 'current' : ''} />)}</div>
 
-        {showLab ? <NumberLab soundEnabled={soundEnabled} /> : (
+        {showLab ? <NumberLab soundEnabled={soundEnabled} authenticated={authenticated} /> : (
           <main className={`task-content task-${item.kind}`}>
             {item.kind === 'trace' ? <TraceCanvas glyph={item.title} onDone={() => setTraceReady(true)} /> : <>
               <div className={`lesson-visual ${audioPlaying ? 'is-speaking' : ''}`}>
@@ -155,15 +159,15 @@ export function TaskModal({ task, events, soundEnabled, onProgress, onClose }: P
               {hasLessonAudio && <>
                 <button className={`lesson-audio-button ${audioPlaying ? 'is-speaking' : ''}`} onClick={() => void readItem()} disabled={audioPlaying}>
                   <span aria-hidden="true">🔊</span>
-                  <strong>{audioPlaying ? '正在朗读…' : deviceRead ? '使用设备朗读' : audioButtonLabel}</strong>
+                  <strong>{audioPlaying ? '正在朗读…' : authenticated && deviceRead ? '使用设备朗读' : audioButtonLabel}</strong>
                 </button>
                 <div className="lesson-audio-status" role="status">{audioStatus}</div>
-                {!audioPlaying && <button className="text-button" onClick={() => { setDeviceRead(!deviceRead); setAudioStatus(deviceRead ? '已切换在线朗读，请点击上方播放' : '已切换设备朗读，请点击上方播放；无声时请检查静音开关和媒体音量'); }}>{deviceRead ? '切换在线朗读' : '改用设备朗读'}</button>}
+                {authenticated && !audioPlaying && <button className="text-button" onClick={() => { setDeviceRead(!deviceRead); setAudioStatus(useDeviceRead ? '已切换在线朗读，请点击上方播放' : '已切换设备朗读，请点击上方播放；无声时请检查静音开关和媒体音量'); }}>{deviceRead ? '切换在线朗读' : '改用设备朗读'}</button>}
               </>}
               {item.options?.length ? <div className="answer-grid">{item.options.map((option) => <button key={option} disabled={saving || isDone} onClick={() => choose(option)}>{option}</button>)}</div> : null}
             </>}
             {isDone ? <div className="learning-assessment"><strong>已经完成 ✓</strong><button className="primary-button" onClick={() => index < task.items.length - 1 ? setIndex(index + 1) : onClose()}>{index < task.items.length - 1 ? '继续下一个 →' : '返回今日学习'}</button></div>
-              : !item.options?.length && (item.kind !== 'trace' || traceReady) && <div className="learning-assessment"><strong>这次学得怎么样？</strong><small>家长可以协助记录</small><div className="assessment-options"><button disabled={saving} onClick={() => finish('independent')}>独立完成</button><button disabled={saving} onClick={() => finish('assisted')}>需要提示</button><button disabled={saving} onClick={() => finish('practice')}>还需练习</button></div></div>}
+              : !item.options?.length && (item.kind !== 'trace' || traceReady) && <div className="learning-assessment"><div className="assessment-heading"><strong>这次学得怎么样？</strong>{!authenticated && <SpeechInfo />}</div><small>家长可以协助记录</small><div className="assessment-options"><button disabled={saving} onClick={() => finish('independent')}>独立完成</button><button disabled={saving} onClick={() => finish('assisted')}>需要提示</button><button disabled={saving} onClick={() => finish('practice')}>还需练习</button></div></div>}
             {events.find(event => event.id === item.id)?.wrongAttempts ? <p className="attempt-note">已经尝试 {events.find(event => event.id === item.id)?.attempts} 次，慢慢来。</p> : null}
             {saving && <p role="status">正在保存…</p>}
           </main>

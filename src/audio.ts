@@ -61,7 +61,7 @@ async function audioCacheKey(text: string, language: string) {
 async function speechBlob(text: string, language: string, signal: AbortSignal): Promise<Blob> {
   const supportsCache = typeof caches !== 'undefined' && typeof location !== 'undefined';
   const key = supportsCache ? await audioCacheKey(text, language) : '';
-  const request = supportsCache ? new Request(`${location.origin}${import.meta.env.BASE_URL}__audio-cache/${key}`) : undefined;
+  const request = supportsCache ? new Request(new URL(`${import.meta.env.BASE_URL}__audio-cache/${key}`, location.href)) : undefined;
   if (request) {
     try {
       const cached = await (await caches.open('lexue-tts-v1')).match(request);
