@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { createBackup } from '../db';
 import {
   createCloudChild, currentCloudChildId, deleteFamilyAccount, downloadCloudSnapshot, exportFamilyData, loadAdminContentPacks, loadAdminFamilies, loadAdminOverview,
-  loadCloudAccount, loginFamily, logoutFamily, registerFamily, selectCloudChild, updateAdminFamily,
+  sendEmailCode, verifyEmailCode, resetFamilyPassword, loadCloudAccount, loginFamily, logoutFamily, registerFamily, selectCloudChild, updateAdminFamily,
   publishAdminContentPack, updateAdminContentPack, uploadCloudSnapshot, type AdminContentPack, type AdminFamily, type AdminOverview, type CloudAccount, type CloudChild,
 } from '../cloud';
 import type { AppData, BackupEnvelopeV1 } from '../types';
-import { validateCloudCredentials } from '../cloud-auth-validation';
+import { validateCloudCredentials, validateCloudEmail, type CloudAuthMode } from '../cloud-auth-validation';
 
 interface Props {
   data: AppData;
@@ -73,9 +73,23 @@ function AdminConsole() {
 
 export function CloudAccountPanel({ data, onRestore }: Props) {
   const [account, setAccount] = useState<CloudAccount>();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<CloudAuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [verificationToken, setVerificationToken] = useState('');
+  const [resendAt, setResendAt] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const countdown = Math.max(0, Math.ceil((resendAt - now) / 1000));
+  useEffect(() => {
+    if (!resendAt) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [resendAt]);
+  const changeMode = (next: CloudAuthMode) => {
+    setMode(next); setCode(''); setVerificationToken(''); setPassword(''); setConfirmPassword(''); setStatus('');
+  };
   const [newChildName, setNewChildName] = useState('');
   const [status, setStatus] = useState('正在检查云端账号…');
   const [deletePassword, setDeletePassword] = useState('');
@@ -86,12 +100,39 @@ export function CloudAccountPanel({ data, onRestore }: Props) {
   };
   useEffect(() => { void refresh(); }, []);
 
+  const requestCode = async () => {
+    const error = validateCloudEmail(email);
+    if (error) { setStatus(error); return; }
+    setBusy(true);
+    try {
+      const result = await sendEmailCode(email.trim(), mode === 'reset' ? 'reset' : 'register');
+      setResendAt(Date.now() + result.retryAfter * 1000); setNow(Date.now());
+      setCode(''); setVerificationToken(''); setStatus(result.message);
+    } catch (cause) { setStatus(cause instanceof Error ? cause.message : '验证码发送失败'); }
+    finally { setBusy(false); }
+  };
   const submit = async () => {
+    if (mode !== 'login' && !verificationToken) {
+      const error = validateCloudEmail(email);
+      if (error || !/^\d{6}$/.test(code)) { setStatus(error || '请输入6位邮箱验证码'); return; }
+      setBusy(true);
+      try {
+        const result = await verifyEmailCode(email.trim(), mode === 'reset' ? 'reset' : 'register', code);
+        setVerificationToken(result.verificationToken); setStatus('邮箱验证成功，请设置密码');
+      } catch (cause) { setStatus(cause instanceof Error ? cause.message : '验证失败'); }
+      finally { setBusy(false); }
+      return;
+    }
     const validationError = validateCloudCredentials(mode, email, password);
     if (validationError) { setStatus(validationError); return; }
+    if (mode !== 'login' && password !== confirmPassword) { setStatus('两次输入的密码不一致'); return; }
     setBusy(true); setStatus('');
     try {
-      const next = mode === 'register' ? await registerFamily(email, password, data.settings.childName) : await loginFamily(email, password);
+      if (mode === 'reset') {
+        await resetFamilyPassword(email.trim(), password, verificationToken);
+        changeMode('login'); setStatus('密码已重置，请使用新密码登录'); return;
+      }
+      const next = mode === 'register' ? await registerFamily(email, password, data.settings.childName, verificationToken) : await loginFamily(email, password);
       setAccount(next); setPassword(''); setStatus(mode === 'register' ? '家庭账号已创建，本机进度将自动同步' : '登录成功');
       const childId = currentCloudChildId();
       if (childId && mode === 'register') await uploadCloudSnapshot(childId, createBackup(data));
@@ -135,15 +176,25 @@ export function CloudAccountPanel({ data, onRestore }: Props) {
 
   if (!account?.authenticated) return <main className="parent-body">
     <section className="parent-card cloud-auth-card">
-      <h2>{mode === 'login' ? '登录家庭账号' : '创建家庭账号'}</h2>
-      <p>不登录也可以继续学习；登录后可以云端备份、换机恢复和管理多个孩子。</p>
+      <h2>{mode === 'login' ? '登录家庭账号' : mode === 'reset' ? '找回账号密码' : '创建家庭账号'}</h2>
+      <p>{mode === 'reset' ? '验证注册邮箱后，即可设置新密码。' : '不登录也可以继续学习；登录后可以云端备份、换机恢复和管理多个孩子。'}</p>
       <form noValidate onSubmit={event => { event.preventDefault(); void submit(); }}>
-        <label>家长邮箱<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} /></label>
-        <label>密码<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={event => setPassword(event.target.value)} /></label>
-        {mode === 'register' && <small>密码至少10个字符。孩子不需要单独账号。</small>}
+        <label>家长邮箱<input type="email" autoComplete="email" maxLength={254} disabled={busy} value={email} onChange={event => { setEmail(event.target.value); setVerificationToken(''); setCode(''); setPassword(''); setConfirmPassword(''); setStatus(''); }} /></label>
+        {mode !== 'login' && !verificationToken && <>
+          <label>邮箱验证码<input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="输入6位验证码" disabled={busy} value={code} onChange={event => setCode(event.target.value.replace(/\D/g, ''))} /></label>
+          <button type="button" className="soft-button full-button" disabled={busy || countdown > 0} onClick={() => void requestCode()}>{countdown > 0 ? `${countdown}秒后可重新发送` : '发送邮箱验证码'}</button>
+          <small>验证码由 zhilefang5156@163.com 发送，10分钟内有效，请留意垃圾邮件。</small>
+        </>}
+        {(mode === 'login' || verificationToken) && <label>{mode === 'login' ? '密码' : '设置新密码'}<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} maxLength={128} disabled={busy} value={password} onChange={event => setPassword(event.target.value)} /></label>}
+        {mode !== 'login' && verificationToken && <>
+          <label>确认新密码<input type="password" autoComplete="new-password" maxLength={128} disabled={busy} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} /></label>
+          <small>密码至少10个字符。{mode === 'register' ? '孩子不需要单独账号。' : '重置成功后，请使用新密码重新登录。'}</small>
+          <button type="button" className="soft-button full-button" disabled={busy} onClick={() => { setVerificationToken(''); setCode(''); setPassword(''); setConfirmPassword(''); setStatus('请重新获取验证码'); }}>重新验证邮箱</button>
+        </>}
         {status && <p className="cloud-status" role="status">{status}</p>}
-        <button type="submit" className="primary-button full-button" disabled={busy}>{busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并同步本机进度'}</button>
-        <button type="button" className="soft-button full-button" disabled={busy} onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setStatus(''); }}>{mode === 'login' ? '还没有账号？创建家庭账号' : '已有账号？返回登录'}</button>
+        <button type="submit" className="primary-button full-button" disabled={busy}>{busy ? '请稍候…' : mode === 'login' ? '登录' : !verificationToken ? '验证邮箱并继续' : mode === 'reset' ? '重置密码' : '注册并同步本机进度'}</button>
+        {mode === 'login' && <button type="button" className="soft-button full-button" disabled={busy} onClick={() => changeMode('reset')}>忘记密码？</button>}
+        <button type="button" className="soft-button full-button" disabled={busy} onClick={() => changeMode(mode === 'login' ? 'register' : 'login')}>{mode === 'login' ? '还没有账号？创建家庭账号' : '已有账号？返回登录'}</button>
       </form>
     </section>
   </main>;

@@ -14,6 +14,9 @@ importers:
       idb:
         specifier: ^8.0.3
         version: 8.0.3
+      nodemailer:
+        specifier: ^10.1.2
+        version: 10.1.2
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -27,6 +30,9 @@ importers:
         specifier: ^7.4.0
         version: 7.4.1
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.10
+        version: 0.5.10
       '@types/node':
         specifier: ^22.15.30
         version: 22.20.1
@@ -606,6 +612,9 @@ packages:
   '@csstools/css-tokenizer@3.0.4':
     resolution: {integrity: sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw==}
     engines: {node: '>=18'}
+
+  '@electric-sql/pglite@0.5.10':
+    resolution: {integrity: sha512-tXc/25U3ulOkiRQuTFdwIv+JhBqtMdAF7Gvo6CfZZWtSB4+hgC4Wr2vwK5ngvvN5PJfAAEGIsfyCVy1JhCOBYw==}
 
   '@esbuild/aix-ppc64@0.28.2':
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
@@ -1788,6 +1797,10 @@ packages:
   node-releases@2.0.53:
     resolution: {integrity: sha512-D9UOmYG3UH1V+ENW56t5QXBwJw1YEY18ruVeus89Rw+SyIgjPkCO84bRzO3uNIYosJbNwiabWVn48o3uJLjxFQ==}
     engines: {node: '>=18'}
+
+  nodemailer@10.1.2:
+    resolution: {integrity: sha512-rnQn9Rzh8RAwcp42MVsIvxbsv6YZ2a2/av+uyJ/LPU1+2QSlrRgFsWWZTKenyRUqkIl8urOI0c4+CEcmFdsvQw==}
+    engines: {node: '>=20.0.0'}
 
   nwsapi@2.2.24:
     resolution: {integrity: sha512-7YRhZ3jS45LwmSCT4b2sVFHt/WuovaktDU07QrtOBY2PXskss5a9jfmR9jptyumwXST+rFjrmppMY1KT/yn35A==}
@@ -3255,6 +3268,8 @@ snapshots:
   '@csstools/css-tokenizer@3.0.4':
     optional: true
 
+  '@electric-sql/pglite@0.5.10': {}
+
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
 
@@ -4420,6 +4435,8 @@ snapshots:
   node-hex@1.0.1: {}
 
   node-releases@2.0.53: {}
+
+  nodemailer@10.1.2: {}
 
   nwsapi@2.2.24:
     optional: true

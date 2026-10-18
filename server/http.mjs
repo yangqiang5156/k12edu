@@ -43,7 +43,7 @@ export function requestIp(req) {
 export function apiError(res, error, fallback = '服务暂时不可用') {
   const status = Number(error?.status) || 500;
   if (status >= 500) console.error(fallback, error?.message);
-  sendJson(res, status, { error: status >= 500 ? fallback : error?.message || fallback }, error?.retryAfter ? { 'Retry-After': String(error.retryAfter) } : {});
+  sendJson(res, status, { error: status >= 500 ? error?.publicMessage || fallback : error?.message || fallback }, error?.retryAfter ? { 'Retry-After': String(error.retryAfter) } : {});
 }
 
 // 对供应商响应设置实际读取上限，避免无 Content-Length 的大响应耗尽内存。

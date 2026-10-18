@@ -29,8 +29,12 @@ suite('真实PostgreSQL安全集成（独立临时数据库）', () => {
   afterAll(async () => { await db?.close(); });
   beforeEach(async () => {
     await db.query('TRUNCATE families,devices,api_rate_windows,service_budgets,upstream_leases,global_usage_daily CASCADE');
-    identity = createIdentityService(db, env);
-    const registered = await call(identity.handle, '/api/auth/register', { email: 'admin@example.test', password: 'test-password-123456', deviceId: 'database-test-device-12345' });
+    await db.query('TRUNCATE email_verifications');
+    let code;
+    identity = createIdentityService(db, env, { sendVerificationMail: async mail => { code = mail.code; } });
+    await call(identity.handle, '/api/auth/email-code', { email: 'admin@example.test', purpose: 'register' });
+    const verified = await call(identity.handle, '/api/auth/verify-email', { email: 'admin@example.test', purpose: 'register', code });
+    const registered = await call(identity.handle, '/api/auth/register', { email: 'admin@example.test', verificationToken: verified.data.verificationToken, password: 'test-password-123456', deviceId: 'database-test-device-12345' });
     expect(registered.status).toBe(201);
     token = registered.data.token; childId = registered.data.childId;
     actor = await identity.authenticate({ headers: { authorization: `Bearer ${token}` } });

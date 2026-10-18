@@ -1,3 +1,4 @@
+import { createEmailVerification, createVerificationMailer } from './email-verification.mjs';
 import { createRateLimiter } from './rate-limit.mjs';
 import { randomUUID } from 'node:crypto';
 import { apiError, readJson, requestIp, sendJson } from './http.mjs';
@@ -26,7 +27,7 @@ function publicChild(row) {
   return { id: row.id, name: row.name, birthYear: row.birth_year ?? undefined, updatedAt: row.updated_at };
 }
 
-export function createIdentityService(database, env = process.env) {
+export function createIdentityService(database, env = process.env, options = {}) {
   const configuredSecret = env.SESSION_SECRET?.trim();
   if ((database.configured || env.DATABASE_REQUIRED === 'true') && (!configuredSecret || configuredSecret.length < 32)) {
     throw new Error('生产环境必须配置至少32字符的 SESSION_SECRET');
@@ -37,15 +38,16 @@ export function createIdentityService(database, env = process.env) {
   const accountLifetime = Math.min(30, Math.max(1, Number(env.ACCOUNT_SESSION_DAYS || 14))) * 86400;
   const rate = createRateLimiter(database);
   const sessions = new Map();
+  const verification = createEmailVerification(database, secret, options.sendVerificationMail || createVerificationMailer(env));
   const checkAuthRate = (req, action, limit) => rate(`auth:${action}:${requestIp(req)}`, limit, 15 * 60_000);
-  const tokenFor = async (identity) => {
+  const tokenFor = async (identity, client = database) => {
     const lifetime = identity.type === 'account' ? accountLifetime : guestLifetime;
     const sessionId = randomUUID();
     const expires = new Date(Date.now() + lifetime * 1000);
     if (database.configured) {
-      await database.query('DELETE FROM access_sessions WHERE expires_at<now()');
-      await database.query("DELETE FROM access_sessions WHERE id IN (SELECT id FROM access_sessions WHERE device_id=$1 ORDER BY expires_at DESC OFFSET 4)", [identity.deviceId]);
-      await database.query('INSERT INTO access_sessions(id,user_id,device_id,expires_at) VALUES($1,$2,$3,$4)', [sessionId, identity.userId || null, identity.deviceId, expires]);
+      await client.query('DELETE FROM access_sessions WHERE expires_at<now()');
+      await client.query("DELETE FROM access_sessions WHERE id IN (SELECT id FROM access_sessions WHERE device_id=$1 ORDER BY expires_at DESC OFFSET 4)", [identity.deviceId]);
+      await client.query('INSERT INTO access_sessions(id,user_id,device_id,expires_at) VALUES($1,$2,$3,$4)', [sessionId, identity.userId || null, identity.deviceId, expires]);
     } else {
       for (const [id, end] of sessions) if (end < Date.now()) sessions.delete(id);
       if (sessions.size >= 10000) throw Object.assign(new Error('会话数量达到上限'), { status: 429 });
@@ -81,10 +83,10 @@ export function createIdentityService(database, env = process.env) {
     return { ...payload, isAdmin: Boolean(row.is_admin), familyId: payload.type === 'account' ? row.family_id : undefined };
   };
 
-  const registerDevice = async (deviceId, req, familyId = null) => {
+  const registerDevice = async (deviceId, req, familyId = null, client = database) => {
     if (!devicePattern.test(deviceId)) { const error = new Error('设备标识无效'); error.status = 400; throw error; }
     if (!database.configured) return;
-    await database.query(`INSERT INTO devices(id, family_id, last_ip, user_agent)
+    await client.query(`INSERT INTO devices(id, family_id, last_ip, user_agent)
       VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET
       family_id=COALESCE(EXCLUDED.family_id, devices.family_id), last_seen_at=now(), last_ip=EXCLUDED.last_ip, user_agent=EXCLUDED.user_agent`,
     [deviceId, familyId, requestIp(req), cleanText(req.headers['user-agent'], 500)]);
@@ -122,6 +124,39 @@ export function createIdentityService(database, env = process.env) {
         const identity = { type: 'guest', deviceId };
         return sendJson(res, 200, { token: await tokenFor(identity), expiresIn: guestLifetime, identity });
       }
+      if (['/api/auth/email-code', '/api/auth/verify-email', '/api/auth/reset-password'].includes(path) && req.method === 'POST') {
+        if (!database.configured) throw Object.assign(new Error('家庭账号服务尚未配置'), { status: 503 });
+        await checkAuthRate(req, path, path.endsWith('email-code') ? 10 : 20);
+        const body = await readJson(req, 8192);
+        const email = cleanText(body.email, 254).toLowerCase();
+        const purpose = path.endsWith('reset-password') ? 'reset' : body.purpose;
+        if (!emailPattern.test(email) || !['register', 'reset'].includes(purpose)) throw Object.assign(new Error('请输入有效邮箱和验证用途'), { status: 400 });
+        if (purpose === 'register' && env.REGISTRATION_ENABLED === 'false') throw Object.assign(new Error('新账号注册暂未开放'), { status: 403 });
+        if (path.endsWith('email-code')) {
+          if (!env.SMTP_AUTH_CODE?.trim() && !options.sendVerificationMail) throw Object.assign(new Error('邮箱验证码服务尚未配置'), { status: 503 });
+          await rate('auth:email-global', 200, 86400000);
+          await rate(`auth:email-daily:${email}`, 10, 86400000);
+          const users = await database.query('SELECT id FROM parent_users WHERE email=$1', [email]);
+          // 找回密码时统一响应，避免泄露邮箱是否注册。
+          if (purpose === 'register' && users.rows.length) throw Object.assign(new Error('该邮箱已经注册，请登录或找回密码'), { status: 409 });
+          if (purpose === 'register' || users.rows.length) await verification.send(email, purpose);
+          return sendJson(res, 200, { message: '若邮箱可用于此操作，验证码已发送，请检查收件箱或垃圾邮件', retryAfter: 60 });
+        }
+        if (path.endsWith('verify-email')) {
+          await rate(`auth:verify-email:${email}`, 20, 15 * 60000);
+          return sendJson(res, 200, { verificationToken: await verification.verify(email, purpose, typeof body.code === 'string' ? body.code : '') });
+        }
+        const password = typeof body.password === 'string' ? body.password : '';
+        if (password.length < 10 || password.length > 128) throw Object.assign(new Error('密码需为10–128个字符'), { status: 400 });
+        const passwordHash = await hashPassword(password);
+        await database.transaction(async client => {
+          await verification.consume(client, email, 'reset', body.verificationToken);
+          const updated = await client.query('UPDATE parent_users SET password_hash=$1 WHERE email=$2 RETURNING id', [passwordHash, email]);
+          if (!updated.rows.length) throw Object.assign(new Error('账号不存在，请重新验证邮箱'), { status: 400 });
+          await client.query('DELETE FROM access_sessions WHERE user_id=$1', [updated.rows[0].id]);
+        });
+        return sendJson(res, 200, { ok: true });
+      }
       if (path === '/api/auth/register' && req.method === 'POST') {
         await checkAuthRate(req, 'register', 10);
         await rate('auth:global-register', Number(env.REGISTRATION_GLOBAL_DAILY_LIMIT || 200), 86400000);
@@ -140,6 +175,7 @@ export function createIdentityService(database, env = process.env) {
         const passwordHash = await hashPassword(password);
         try {
           await database.transaction(async (client) => {
+            await verification.consume(client, email, 'register', body.verificationToken);
             await client.query('INSERT INTO families(id,name) VALUES($1,$2)', [familyId, `${childName}的家庭`]);
             await client.query('INSERT INTO parent_users(id,family_id,email,password_hash,display_name,is_admin) VALUES($1,$2,$3,$4,$5,$6)', [userId, familyId, email, passwordHash, displayName, false]);
             await client.query('INSERT INTO children(id,family_id,name) VALUES($1,$2,$3)', [childId, familyId, childName]);
@@ -162,15 +198,20 @@ export function createIdentityService(database, env = process.env) {
         const password = typeof body.password === 'string' ? body.password : '';
         const deviceId = cleanText(body.deviceId, 100);
         if (!devicePattern.test(deviceId)) { const error = new Error('设备标识无效'); error.status = 400; throw error; }
-        const result = await database.query(`SELECT u.*, f.status family_status FROM parent_users u JOIN families f ON f.id=u.family_id WHERE u.email=$1`, [email]);
-        const user = result.rows[0];
-        if (!user || !await verifyPassword(password, user.password_hash)) { const error = new Error('邮箱或密码不正确'); error.status = 401; throw error; }
-        if (user.family_status !== 'active') { const error = new Error('家庭账号已停用'); error.status = 403; throw error; }
-        await registerDevice(deviceId, req, user.family_id);
-        await database.query('UPDATE parent_users SET last_login_at=now() WHERE id=$1', [user.id]);
-        const identity = { type: 'account', userId: user.id, familyId: user.family_id, deviceId };
-        return sendJson(res, 200, { token: await tokenFor(identity), expiresIn: accountLifetime, identity, account: await me(identity) });
+        const result = await database.transaction(async client => {
+          // 与重置密码锁定同一用户，避免并发登录在重置后创建旧密码会话。
+          const found = await client.query(`SELECT u.*, f.status family_status FROM parent_users u JOIN families f ON f.id=u.family_id WHERE u.email=$1 FOR UPDATE OF u`, [email]);
+          const user = found.rows[0];
+          if (!user || !await verifyPassword(password, user.password_hash)) throw Object.assign(new Error('邮箱或密码不正确'), { status: 401 });
+          if (user.family_status !== 'active') throw Object.assign(new Error('家庭账号已停用'), { status: 403 });
+          await registerDevice(deviceId, req, user.family_id, client);
+          await client.query('UPDATE parent_users SET last_login_at=now() WHERE id=$1', [user.id]);
+          const identity = { type: 'account', userId: user.id, familyId: user.family_id, deviceId };
+          return { token: await tokenFor(identity, client), identity };
+        });
+        return sendJson(res, 200, { ...result, expiresIn: accountLifetime, account: await me(result.identity) });
       }
+
       if (path === '/api/auth/me' && req.method === 'GET') {
         const identity = await authenticate(req, { allowGuest: true });
         return sendJson(res, 200, await me(identity));

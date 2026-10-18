@@ -2,7 +2,7 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-const schema = `
+export const schema = `
 CREATE TABLE IF NOT EXISTS api_rate_windows (key text PRIMARY KEY, count integer NOT NULL, expires_at timestamptz NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_rate_expiry ON api_rate_windows(expires_at);
 CREATE TABLE IF NOT EXISTS service_budgets (
@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS parent_users (
   created_at timestamptz NOT NULL DEFAULT now(),
   last_login_at timestamptz
 );
+CREATE TABLE IF NOT EXISTS email_verifications (
+  email text NOT NULL, purpose text NOT NULL CHECK (purpose IN ('register','reset')),
+  id uuid NOT NULL, code_hash text, token_hash text, attempts integer NOT NULL DEFAULT 0,
+  expires_at timestamptz NOT NULL, sent_at timestamptz NOT NULL,
+  PRIMARY KEY(email,purpose)
+);
+CREATE INDEX IF NOT EXISTS idx_email_verification_expiry ON email_verifications(expires_at);
 CREATE TABLE IF NOT EXISTS children (
   id uuid PRIMARY KEY,
   family_id uuid NOT NULL REFERENCES families(id) ON DELETE CASCADE,

@@ -70,10 +70,21 @@ export async function loadCloudAccount(): Promise<CloudAccount> {
   return jsonRequest<CloudAccount>('/auth/me');
 }
 
-export async function registerFamily(email: string, password: string, childName: string) {
+export type EmailVerificationPurpose = 'register' | 'reset';
+async function authRequest<T>(path: string, body: object): Promise<T> {
+  const response = await fetch(api(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '操作失败，请稍后重试');
+  return data as T;
+}
+export const sendEmailCode = (email: string, purpose: EmailVerificationPurpose) => authRequest<{ message: string; retryAfter: number }>('/auth/email-code', { email, purpose });
+export const verifyEmailCode = (email: string, purpose: EmailVerificationPurpose, code: string) => authRequest<{ verificationToken: string }>('/auth/verify-email', { email, purpose, code });
+export const resetFamilyPassword = (email: string, password: string, verificationToken: string) => authRequest<{ ok: true }>('/auth/reset-password', { email, password, verificationToken });
+
+export async function registerFamily(email: string, password: string, childName: string, verificationToken: string) {
   const response = await fetch(api('/auth/register'), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, childName, deviceId: deviceId() }),
+    body: JSON.stringify({ email, password, childName, verificationToken, deviceId: deviceId() }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || '注册失败');

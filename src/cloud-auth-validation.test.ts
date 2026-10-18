@@ -16,3 +16,8 @@ describe('家庭账号表单校验', () => {
     expect(validateCloudCredentials('login', 'parent@example.com', '')).toBe('请输入密码');
   });
 });
+
+it('重置密码使用与注册相同的强度要求', () => {
+  expect(validateCloudCredentials('reset', 'parent@example.com', '12345678')).toBe('新密码至少需要10个字符');
+  expect(validateCloudCredentials('reset', 'parent@example.com', 'new-password-123')).toBeUndefined();
+});
