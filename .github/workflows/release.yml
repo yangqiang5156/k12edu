@@ -37,17 +37,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 设置 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
       - name: 安装固定版本凭据扫描器
         run: sh scripts/install-security-scanner.sh
 
       - name: 扫描全部可达历史和当前公开文件
         run: node scripts/security-scan.mjs
-
-      - name: 设置 Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          package-manager-cache: false
 
       - name: 设置 pnpm
         run: corepack enable && corepack prepare pnpm@10.15.1 --activate
@@ -85,11 +85,17 @@ jobs:
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           if ! docker pull "$LEXUE_RUNTIME_IMAGE"; then
             docker build --platform linux/amd64 --pull --file deploy/Dockerfile.environment --tag "$LEXUE_RUNTIME_IMAGE" .
-            docker push "$LEXUE_RUNTIME_IMAGE"
           fi
+          actual="$(docker run --rm --network none --entrypoint node "$LEXUE_RUNTIME_IMAGE" --version)"
+          echo "运行环境 Node.js: $actual"
+          test "$actual" = v24.22.1
+          docker push "$LEXUE_RUNTIME_IMAGE"
           docker build --platform linux/amd64 --pull=false --file deploy/Dockerfile.app \
             --build-arg "LEXUE_RUNTIME_IMAGE=$LEXUE_RUNTIME_IMAGE" \
             --tag "$repository:$GITHUB_REF_NAME" --tag "$repository:latest" .
+          actual="$(docker run --rm --network none --entrypoint node "$repository:$GITHUB_REF_NAME" --version)"
+          echo "发布镜像 Node.js: $actual"
+          test "$actual" = v24.22.1
           docker push "$repository:$GITHUB_REF_NAME"
           docker push "$repository:latest"
 
@@ -119,7 +125,7 @@ jobs:
       - name: 创建 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --generate-notes --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
 
   deploy-aliyun:
     needs: build-and-publish

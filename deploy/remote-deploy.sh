@@ -66,6 +66,15 @@ if ! docker image inspect "$LEXUE_RUNTIME_IMAGE" >/dev/null 2>&1; then
 fi
 docker image inspect "$LEXUE_RUNTIME_IMAGE" >/dev/null
 
+# 切换前核实缓存运行环境，避免旧版本进入生产。
+expected_node_version=v24.22.1
+actual_node_version="$(docker run --rm --network none --entrypoint node "$LEXUE_RUNTIME_IMAGE" --version)"
+[ "$actual_node_version" = "$expected_node_version" ] || {
+  printf '运行环境 Node.js 版本不符：期望 %s，实际 %s\n' "$expected_node_version" "$actual_node_version" >&2
+  exit 1
+}
+printf '运行环境 Node.js：%s\n' "$actual_node_version"
+
 build_dir="$(mktemp -d ./lexue-build.XXXXXX)"
 trap 'rm -rf "$build_dir"' EXIT HUP INT TERM
 tar -xzf "$LEXUE_APP_ARCHIVE" -C "$build_dir"
@@ -78,7 +87,10 @@ trap - EXIT HUP INT TERM
 write_env "$LEXUE_IMAGE"
 # PostgreSQL 由 compose.postgres-only.yaml 独立管理，但共享同一项目网络。
 # 这里不能使用 --remove-orphans，否则发布应用时会误删数据库容器。
-if docker compose -f "$COMPOSE_FILE" up -d --pull never lexue && wait_healthy; then
+if docker compose -f "$COMPOSE_FILE" up -d --pull never lexue && wait_healthy &&
+  actual_node_version="$(docker exec "$CONTAINER_NAME" node --version)" &&
+  [ "$actual_node_version" = "$expected_node_version" ]; then
+  printf '生产容器 Node.js：%s\n' "$actual_node_version"
   if [ -n "${LEXUE_RUNTIME_ARCHIVE:-}" ]; then
     rm -f "$LEXUE_RUNTIME_ARCHIVE" "$LEXUE_RUNTIME_ARCHIVE.sha256"
   fi
@@ -86,7 +98,7 @@ if docker compose -f "$COMPOSE_FILE" up -d --pull never lexue && wait_healthy; t
   exit 0
 fi
 
-printf '新版本健康检查失败，准备回滚。\n' >&2
+printf '新版本启动、健康或 Node.js 版本检查失败，准备回滚。\n' >&2
 docker logs --tail 100 "$CONTAINER_NAME" >&2 || true
 
 if [ -n "$previous_image" ]; then

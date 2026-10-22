@@ -69,7 +69,15 @@ case "$1" in
     esac ;;
   image)
     if [ "$MOCK_MISSING" = true ] && [ "$3" = runtime:fixed ] && [ ! -f "$MOCK_ROOT/loaded" ]; then exit 1; fi ;;
+  exec)
+    if [ "$MOCK_MODE" = app-node-mismatch ]; then printf 'v22.23.3\\n'; else printf 'v24.22.1\\n'; fi
+    ;;
   run)
+    case "$*" in
+      *--version*)
+        if [ "$MOCK_MODE" = runtime-node-mismatch ]; then printf 'v22.23.3\\n'; else printf 'v24.22.1\\n'; fi
+        exit 0 ;;
+    esac
     shift
     while [ "$1" != env-config.mjs ]; do shift; done
     shift
@@ -111,16 +119,16 @@ describe('生产部署失败恢复', () => {
     const log = readFileSync(join(root, 'docker.log'), 'utf8');
     expect(log.indexOf('load -i')).toBeLessThan(log.indexOf('build --network'));
   });
-  it('校验失败或构建失败时不会切换生产镜像', () => {
-    for (const mode of ['checksum-fail', 'build-fail']) {
+  it('校验、运行环境版本或构建失败时不会切换生产镜像', () => {
+    for (const mode of ['checksum-fail', 'build-fail', 'runtime-node-mismatch']) {
       const { root, run } = deployFixture(mode);
       if (mode === 'checksum-fail') writeFileSync(join(root, 'lexue-app-v0.11.0.tar.gz'), 'tampered');
       expect(run().status).not.toBe(0);
       expect(readFileSync(join(root, '.env'), 'utf8')).toMatch(/LEXUE_IMAGE=['"]?old:version/);
     }
   });
-  it('新容器启动或健康检查失败会回滚旧镜像，并将发布标记为失败', () => {
-    for (const mode of ['unhealthy', 'compose-fail']) {
+  it('新容器启动、健康或 Node.js 版本检查失败会回滚旧镜像，并将发布标记为失败', () => {
+    for (const mode of ['unhealthy', 'compose-fail', 'app-node-mismatch']) {
       const { root, run } = deployFixture(mode); const result = run();
       expect(result.status).toBe(1);
       expect(readFileSync(join(root, '.env'), 'utf8')).toMatch(/LEXUE_IMAGE=['"]?old:version/);
